@@ -2,7 +2,9 @@
 
 **[證實：本機產圖／建置／離線驗證]** 已用本機 `~/Library/Fonts/ENSFont.ttc` 的第一個字型（ENS Font Regular）產生「腦哥」。以 1024 pt 產圖、裁去外圍空白、等比縮至 128×64 並置中，亮像素範圍為 x=0..127、y=2..61：兩字合計 128×60，無裁字。framebuffer 為 1,024 B，每頁 128 B，每 byte 的 bit0 為該欄最上像素。
 
-**[待驗證：硬體]** 本實驗尚未燒錄或傳送至 OLED。OLED controller 型號、D/C、邏輯電壓與原控制器隔離方式須先確認。靜態畫面不等於控制器釋放輸出；本工具不提供 SPI 仲裁。現有 DI/CLK/CS/GND 並接方式不足以執行這個寫入測試。
+**[證實：2026-11-01 燒錄與 USB]** 已依使用者要求，以 `picotool load -v -x -f` 燒錄至 Feather RP2040，flash verification 通過，重開後 USB 產品名稱為 `Display Write Test`。僅送出 `HELLO`，收到 `DISPLAY_WRITE_TEST 1 DI=10 CLK=11 CS=12 DC=9`；沒有送出 `WRITE1` 或 framebuffer。程式在開機、USB 連線與 HELLO 階段保持四支 GPIO 輸入／輸出禁用。
+
+**[待驗證：OLED 回寫]** OLED controller 型號、D/C、邏輯電壓與原控制器隔離方式須先確認；尚未傳送至 OLED。靜態畫面不等於控制器釋放輸出；本工具不提供 SPI 仲裁。現有 DI/CLK/CS/GND 並接方式不足以執行這個寫入測試。
 
 ## 硬體條件
 
@@ -42,11 +44,13 @@ cmake -S poc/rp2040-spi-tap -B poc/build/spi-tap -G Ninja -DPICO_BOARD=adafruit_
 ninja -C poc/build/spi-tap display_write_test
 ```
 
-確認硬體條件並斷開目標板後，實體按鈕進入 BOOTSEL，再安裝（開機不會自動寫入）：
+安裝此專用韌體不會在開機、USB 連線或 HELLO 時驅動顯示線路；真正輸出仍須符合上節硬體條件並收到完整送圖命令。可用實體按鈕進入 BOOTSEL，再安裝：
 
 ```bash
 picotool load -x poc/build/spi-tap/display_write_test.uf2
 ```
+
+若目前韌體支援軟體 BOOTSEL，可使用 `picotool load -v -x -f poc/build/spi-tap/display_write_test.uf2` 同時燒錄、驗證與啟動；本次已用此方式完成。
 
 在兩邊關機時完成實驗接線；先開 Feather USB，再啟用 OLED 評估板。若原控制器負責初始化，須在初始化後、開始本測試前，依實際硬體完成隔離／交接。保持靜態畫面可減少後續覆寫，但不能替代隔離。
 
@@ -79,4 +83,4 @@ USB 流程為 `HELLO` 核對韌體與固定腳位，再送一個 `WRITE1 <CRC32>
 
 在斷開目標板後，以 BOOTSEL 安裝回 `poc/build/spi-tap/spi_tap.uf2`，關機後還原被動四線接法，再依原順序上電。重新接回原控制器時須恢復正確的顯示／定址狀態；必要時由評估板重新初始化。
 
-**驗證範圍：** 本機 8,192 像素 packing round-trip 與合成鏡像解碼一致；host 測試含 USB pseudo-terminal、錯誤韌體、遺失 ACK 不重試、dry-run 不開裝置，以及原生 C parser 的完整／截斷／損壞請求。RP2040 UF2 已建置；實體 OLED 電氣與畫面結果尚未測試。
+**驗證範圍：** 本機 8,192 像素 packing round-trip 與合成鏡像解碼一致；host 測試含 USB pseudo-terminal、錯誤韌體、遺失 ACK 不重試、dry-run 不開裝置，以及原生 C parser 的完整／截斷／損壞請求。RP2040 UF2 已建置並燒錄，flash verification 與真板 USB HELLO 通過；實體 OLED 電氣與畫面結果尚未測試。
