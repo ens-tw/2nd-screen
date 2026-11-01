@@ -9,6 +9,7 @@
 - `spi_tap.c` — SDK 初始化、PIO/DMA 設定、連續 DMA ring 擷取，以 STP2 binary 封包經 USB CDC 串流。
 - `CMakeLists.txt` — 建置設定（板子預設 `adafruit_feather_rp2040`）。
 - `wiring.html` — 接線圖：Feather RP2040 探針腳位示意 ＋ 腳位對照表、安全護欄、燒錄／讀取指令。用 `qlmanage -p wiring.html` 或瀏覽器開啟。
+- [`bluefruit-wiring.html`](bluefruit-wiring.html) — Feather RP2040 ↔ Bluefruit LE UART Friend 六線接線指南（含 RTS/CTS、SDA/SCL 的 UART 腳位對照、模式切換與可列印檢查表）；UART/BLE bridge 韌體待實作。
 - `ref/` — 定位用原圖：`feather-rp2040-pinout-annotated.png`（Adafruit 官方 PrettyPins，已圈出 D10/D11/D12/GND 搭線腳）。目標評估板側的 SPI 測試點（DI/CLK/CS/GND）請依該板資料手冊／原理圖定位。
 
 ## 建置（在 Lima VM `pico` 內）

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Feather RP2040 ↔ Bluefruit LE UART Friend · Wiring guide</title>
+<style>
+:root{--ink:#15252d;--muted:#566970;--paper:#f2f5f3;--card:#fff;--line:#d9e2de;--green:#176c52;--red:#b84337;--gnd:#5d6d76;--tx:#137563;--rx:#2768ad;--cts:#7b4e9c;--rts:#a96c0f;--mono:ui-monospace,SFMono-Regular,Consolas,monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}a{color:#155f70;text-underline-offset:3px}button{font:inherit}button:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid #176c52;outline-offset:4px}code,kbd{font-family:var(--mono);font-size:.9em}code{background:#eef3f0;border-radius:4px;padding:.1em .3em}main{max-width:1120px;margin:auto;padding:38px 28px 68px}.topbar{display:flex;justify-content:space-between;align-items:center;gap:20px;border-bottom:1px solid var(--line);padding-bottom:20px}.brand{font:600 12px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--green)}.print{border:1px solid #bdccc4;background:white;border-radius:7px;color:var(--ink);padding:7px 14px;cursor:pointer;font-size:13px}.print:hover{background:#e9f0eb}.hero{padding:35px 0 27px}.eyebrow{font:12px var(--mono);letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin:0 0 11px}h1{font-size:clamp(30px,4.8vw,49px);line-height:1.12;letter-spacing:-.045em;margin:0 0 17px;font-weight:680}h1 .arrow{color:var(--green);font-weight:400}.lead{max-width:780px;font-size:17px;color:var(--muted);margin:0}.chips{display:flex;gap:9px;flex-wrap:wrap;margin:21px 0 0}.chip{font:11px var(--mono);background:#e7eee8;border:1px solid #d3dfd5;border-radius:99px;padding:5px 10px}.status{background:#fff4dc;border:1px solid #ecd6a6;border-left:4px solid #b27b20;border-radius:7px;padding:14px 18px;font-size:14px;margin-bottom:30px}.status strong{display:block;font-size:14px}.status p{margin:3px 0 0}.section-head{display:flex;gap:13px;align-items:baseline;margin:30px 0 13px}h2{font-size:21px;letter-spacing:-.025em;margin:0}.num{font:12px var(--mono);color:var(--green)}.panel{background:var(--card);border:1px solid var(--line);border-radius:13px;overflow:hidden}.diagram-head{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:17px 22px;border-bottom:1px solid var(--line)}.diagram-head strong{font-size:14px}.diagram-head span{font-size:12px;color:var(--muted)}.diagram-scroll{overflow-x:auto;padding:14px 10px 0}.wiring{display:block;min-width:770px;width:100%;height:auto;font-family:var(--mono)}.wiring .board{fill:#f3f7f4;stroke:#ccdad1;stroke-width:1.5}.wiring .board-label{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:19px;font-weight:650;fill:var(--ink)}.wiring .sub-label{font-size:10.5px;fill:var(--muted)}.wiring .port{fill:white;stroke:#d6e0db}.wiring .pin{font-size:15px;font-weight:650;fill:var(--ink)}.wiring .role{font-size:11px;fill:var(--muted)}.wire{transition:opacity .16s}.wire path{stroke-width:3;fill:none}.wire-label{font-size:10px;font-weight:600}.diagram-note{padding:12px 22px 17px;margin:0;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}.legend{display:flex;flex-wrap:wrap;gap:7px 18px;padding:0 22px 15px;font-size:12px;color:var(--muted)}.legend i,.swatch{display:inline-block;width:16px;height:4px;margin-right:7px;vertical-align:middle;border-radius:3px;background:var(--c)}.table-scroll{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}th{text-align:left;background:#edf3ef;color:#50635a;font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:12px 16px}td{padding:13px 16px;border-top:1px solid #e6ece8;vertical-align:top}td strong{font-weight:650}.pin-cell{white-space:nowrap;font-family:var(--mono);font-size:13px}.direction{font:16px var(--mono);text-align:center;white-space:nowrap}.detail{color:var(--muted);font-size:12px;line-height:1.5}tr[data-wire]{cursor:default}tr[data-wire]:hover,tr[data-wire]:focus{background:#f1f6f2;outline-offset:-3px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:17px}.note{background:white;border:1px solid var(--line);border-radius:11px;padding:20px 22px}.note h3{font-size:16px;margin:0 0 8px}.note p{font-size:14px;margin:7px 0;color:var(--muted)}.note ul,.note ol{padding-left:20px;margin:8px 0;font-size:14px}.note li{margin:7px 0}.flow{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:17px}.flowbox{border-radius:9px;border:1px solid var(--line);background:#f8faf8;padding:16px 18px;font-size:14px}.flowbox h3{font-size:14px;margin:0 0 6px}.flowbox p{margin:0;color:var(--muted)}.flowbox code{font-size:12px}.steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,1fr);gap:17px}.step{background:white;border:1px solid var(--line);border-radius:11px;padding:20px 21px}.step .stepnum{font:12px var(--mono);color:var(--green)}.step h3{font-size:16px;margin:7px 0}.step p{font-size:14px;margin:0;color:var(--muted)}.checklist{display:grid;grid-template-columns:1fr 1fr;gap:12px 28px;padding:20px 22px}.checklist label{display:flex;gap:10px;align-items:flex-start;font-size:14px;cursor:pointer}.checklist input{margin:5px 0 0;accent-color:var(--green);width:16px;height:16px;flex:none}.check-status{border-top:1px solid var(--line);padding:12px 22px;font:12px var(--mono);color:var(--green);background:#f7faf7}.sources{margin-top:34px;border-top:1px solid var(--line);padding-top:19px;font-size:12px;color:var(--muted)}.sources ol{padding-left:19px;line-height:1.9;margin:9px 0}.footnote{font-size:11px;color:var(--muted);margin-top:20px}.warning{color:#805300}.small{font-size:13px;color:var(--muted);margin:10px 0 0}@media(max-width:700px){main{padding:22px 16px 42px}.hero{padding-top:25px}.grid,.flow,.steps,.checklist{grid-template-columns:1fr}.diagram-head{align-items:flex-start;flex-direction:column;gap:4px}.diagram-scroll{padding-top:4px}.table-scroll{font-size:13px}th,td{padding:11px 12px}h2{font-size:19px}.status{margin-bottom:23px}}@media print{@page{size:A4;margin:13mm}body{background:white;font-size:10pt}main{max-width:none;padding:0}.print{display:none}.topbar{padding-bottom:8px}.hero{padding:15px 0 12px}h1{font-size:29pt}.lead{font-size:10pt}.chips{margin-top:10px}.chip{font-size:8pt}.status{margin-bottom:13px;padding:9px 12px}.section-head{margin-top:17px}h2{font-size:14pt}.diagram-scroll{overflow:visible;padding:5px}.wiring{min-width:0}.panel,.note,.step,.flowbox{break-inside:avoid}.diagram-head{padding:10px 14px}.diagram-head strong{font-size:10pt}.diagram-head span,.diagram-note,.legend{font-size:8pt}.diagram-note{padding:8px 14px}.legend{padding:0 14px 10px}table{font-size:9pt}th,td{padding:8px 9px}.grid,.flow{gap:12px}.note,.step{padding:12px}.note p,.note ul,.note ol,.step p,.flowbox,.checklist label{font-size:9pt}.steps{gap:10px}.checklist{gap:8px 16px;padding:12px}.sources{font-size:8pt}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style>
+</head>
+<body>
+<main>
+<div class="topbar"><span class="brand">2nd-screen / bench guide</span><button type="button" class="print" id="print-button">Print / Save PDF</button></div>
+<header class="hero">
+<p class="eyebrow">Adafruit Feather RP2040 + Bluefruit LE UART Friend · nRF51822</p>
+<h1>Feather RP2040 <span class="arrow">↔</span> Bluefruit LE</h1>
+<p class="lead">Six connections for a UART-to-Bluetooth link: power, ground, two data lines, and two hardware flow-control lines. Follow the <strong>printed pin labels</strong> on each board.</p>
+<div class="chips"><span class="chip">UART0 · GP0–GP3</span><span class="chip">3.3 V logic</span><span class="chip">RTS / CTS flow control</span><span class="chip">Initial test: 9600 · 8N1</span></div>
+</header>
+<div class="status"><strong>Wiring plan — Bluetooth bridge firmware is still needed.</strong><p>The current <code>spi_tap</code> firmware streams through USB. These connections prepare the hardware; they do not enable Bluetooth by themselves. Keep USB available for power, programming, and diagnostics.</p></div>
+
+<section aria-labelledby="diagram-title">
+<div class="section-head"><span class="num">01</span><h2 id="diagram-title">Connect these six wires</h2></div>
+<div class="panel">
+<div class="diagram-head"><strong>Feather labels → Bluefruit labels</strong><span>Arrows show signal direction. Scroll sideways on a small screen.</span></div>
+<div class="diagram-scroll">
+<svg class="wiring" viewBox="0 0 1000 520" role="img" aria-labelledby="svg-title svg-desc">
+<title id="svg-title">Feather RP2040 to Bluefruit LE UART Friend wiring</title>
+<desc id="svg-desc">Feather 3V to Bluefruit VIN; GND to GND; TX GP0 to RXI; RX GP1 from TXO; SDA GP2, configured as UART0 CTS, from Bluefruit RTS; SCL GP3, configured as UART0 RTS, to Bluefruit CTS. This is a logical schematic, not physical pin order.</desc>
+<defs><marker id="arrow-power" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--red)"/></marker><marker id="arrow-tx" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--tx)"/></marker><marker id="arrow-rx" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--rx)"/></marker><marker id="arrow-cts" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--cts)"/></marker><marker id="arrow-rts" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--rts)"/></marker></defs>
+<rect class="board" x="27" y="27" width="304" height="468" rx="15"/><rect class="board" x="669" y="27" width="304" height="468" rx="15"/>
+<text class="board-label" x="49" y="64">Feather RP2040</text><text class="sub-label" x="49" y="84">USB-powered · Adafruit #4884</text>
+<text class="board-label" x="691" y="64">Bluefruit LE UART Friend</text><text class="sub-label" x="691" y="84">nRF51822 · Adafruit #2479</text>
+<!-- Each row is grouped by function; it is not a picture of the boards. -->
+<g><rect class="port" x="44" y="110" width="270" height="48" rx="7"/><text class="pin" x="59" y="131">3V</text><text class="role" x="59" y="148">3.3 V supply output</text><rect class="port" x="686" y="110" width="270" height="48" rx="7"/><text class="pin" x="701" y="131">VIN</text><text class="role" x="701" y="148">Module power input</text></g>
+<g><rect class="port" x="44" y="173" width="270" height="48" rx="7"/><text class="pin" x="59" y="194">GND</text><text class="role" x="59" y="211">Common ground</text><rect class="port" x="686" y="173" width="270" height="48" rx="7"/><text class="pin" x="701" y="194">GND</text><text class="role" x="701" y="211">Common ground</text></g>
+<g><rect class="port" x="44" y="236" width="270" height="48" rx="7"/><text class="pin" x="59" y="257">TX · GP0</text><text class="role" x="59" y="274">UART0 TX · output</text><rect class="port" x="686" y="236" width="270" height="48" rx="7"/><text class="pin" x="701" y="257">RXI</text><text class="role" x="701" y="274">Receive into Bluefruit</text></g>
+<g><rect class="port" x="44" y="299" width="270" height="48" rx="7"/><text class="pin" x="59" y="320">RX · GP1</text><text class="role" x="59" y="337">UART0 RX · input</text><rect class="port" x="686" y="299" width="270" height="48" rx="7"/><text class="pin" x="701" y="320">TXO</text><text class="role" x="701" y="337">Transmit out of Bluefruit</text></g>
+<g><rect class="port" x="44" y="362" width="270" height="48" rx="7"/><text class="pin" x="59" y="383">SDA · GP2</text><text class="role" x="59" y="400">Configure as UART0 CTS · input</text><rect class="port" x="686" y="362" width="270" height="48" rx="7"/><text class="pin" x="701" y="383">RTS</text><text class="role" x="701" y="400">LOW: Bluefruit can receive</text></g>
+<g><rect class="port" x="44" y="425" width="270" height="48" rx="7"/><text class="pin" x="59" y="446">SCL · GP3</text><text class="role" x="59" y="463">Configure as UART0 RTS · output</text><rect class="port" x="686" y="425" width="270" height="48" rx="7"/><text class="pin" x="701" y="446">CTS</text><text class="role" x="701" y="463">LOW: allow Bluefruit to transmit</text></g>
+<g class="wire" data-id="power" style="color:var(--red)"><path d="M316 134 H682" stroke="currentColor" marker-end="url(#arrow-power)"/><text class="wire-label" x="500" y="125" text-anchor="middle" fill="currentColor">POWER · 3.3 V</text></g>
+<g class="wire" data-id="gnd" style="color:var(--gnd)"><path d="M316 197 H682" stroke="currentColor"/><text class="wire-label" x="500" y="188" text-anchor="middle" fill="currentColor">COMMON GROUND</text></g>
+<g class="wire" data-id="tx" style="color:var(--tx)"><path d="M316 260 H682" stroke="currentColor" marker-end="url(#arrow-tx)"/><text class="wire-label" x="500" y="251" text-anchor="middle" fill="currentColor">RP2040 → BLUEFRUIT DATA</text></g>
+<g class="wire" data-id="rx" style="color:var(--rx)"><path d="M682 323 H316" stroke="currentColor" marker-end="url(#arrow-rx)"/><text class="wire-label" x="500" y="314" text-anchor="middle" fill="currentColor">BLUEFRUIT → RP2040 DATA</text></g>
+<g class="wire" data-id="cts" style="color:var(--cts)"><path d="M682 386 H316" stroke="currentColor" marker-end="url(#arrow-cts)"/><text class="wire-label" x="500" y="377" text-anchor="middle" fill="currentColor">BLUEFRUIT READY → RP2040 CTS</text></g>
+<g class="wire" data-id="rts" style="color:var(--rts)"><path d="M316 449 H682" stroke="currentColor" marker-end="url(#arrow-rts)"/><text class="wire-label" x="500" y="440" text-anchor="middle" fill="currentColor">RP2040 READY → BLUEFRUIT CTS</text></g>
+</svg>
+</div>
+<p class="diagram-note"><strong>Logical connection diagram, not physical pin order.</strong> Find each pin by its printed name. On the Feather, <code>SDA = GP2</code> and <code>SCL = GP3</code>; those pins become UART flow control in this plan.</p>
+<div class="legend"><span><i style="--c:var(--red)"></i>Power</span><span><i style="--c:var(--gnd)"></i>Ground</span><span><i style="--c:var(--tx)"></i>Data out</span><span><i style="--c:var(--rx)"></i>Data in</span><span><i style="--c:var(--cts)"></i>CTS input</span><span><i style="--c:var(--rts)"></i>RTS output</span></div>
+</div>
+</section>
+
+<section aria-labelledby="table-title">
+<div class="section-head"><span class="num">02</span><h2 id="table-title">Pin-by-pin reference</h2></div>
+<p class="small" style="margin:0 0 12px">Hover or focus a row to highlight its wire in the diagram.</p>
+<div class="panel table-scroll"><table>
+<thead><tr><th scope="col">Wire</th><th scope="col">Feather printed label</th><th scope="col">Direction</th><th scope="col">Bluefruit label</th><th scope="col">Purpose</th></tr></thead>
+<tbody>
+<tr data-wire="power" tabindex="0"><td><span class="swatch" style="--c:var(--red)"></span>Power</td><td class="pin-cell">3V</td><td class="direction">→</td><td class="pin-cell">VIN</td><td>Power Bluefruit from the Feather’s 3.3 V rail.</td></tr>
+<tr data-wire="gnd" tabindex="0"><td><span class="swatch" style="--c:var(--gnd)"></span>Ground</td><td class="pin-cell">GND</td><td class="direction">↔</td><td class="pin-cell">GND</td><td>Shared power and signal reference.</td></tr>
+<tr data-wire="tx" tabindex="0"><td><span class="swatch" style="--c:var(--tx)"></span>Data out</td><td class="pin-cell">TX · GP0</td><td class="direction">→</td><td class="pin-cell">RXI</td><td>Screen stream and AT commands into Bluefruit.</td></tr>
+<tr data-wire="rx" tabindex="0"><td><span class="swatch" style="--c:var(--rx)"></span>Data in</td><td class="pin-cell">RX · GP1</td><td class="direction">←</td><td class="pin-cell">TXO</td><td>Replies and received BLE data back to the RP2040.</td></tr>
+<tr data-wire="cts" tabindex="0"><td><span class="swatch" style="--c:var(--cts)"></span>Flow control</td><td class="pin-cell">SDA · GP2</td><td class="direction">←</td><td class="pin-cell">RTS</td><td>UART0 CTS input: LOW permits RP2040 transmission.</td></tr>
+<tr data-wire="rts" tabindex="0"><td><span class="swatch" style="--c:var(--rts)"></span>Flow control</td><td class="pin-cell">SCL · GP3</td><td class="direction">→</td><td class="pin-cell">CTS</td><td>UART0 RTS output: LOW permits Bluefruit transmission.</td></tr>
+</tbody></table></div>
+<div class="flow">
+<div class="flowbox"><h3>TX ↔ RX, and RTS ↔ CTS</h3><p>Cross the function names: a transmitter feeds a receiver, and each board’s ready output feeds the other board’s CTS input. Connect both flow-control wires for this link.</p></div>
+<div class="flowbox"><h3>SDA / SCL are being repurposed</h3><p>GP2 and GP3 must be configured for UART0. Keep the STEMMA QT port and other devices on those I²C lines disconnected while using this pin plan.</p></div>
+</div>
+</section>
+
+<section aria-labelledby="mode-title">
+<div class="section-head"><span class="num">03</span><h2 id="mode-title">Mode switch and spare pins</h2></div>
+<div class="grid">
+<article class="note"><h3>First test: CMD / command mode</h3><p>Leave the <code>MOD</code> pin unconnected and set the module’s slide switch to <strong>CMD</strong>. Start the UART test at <strong>9600 baud, 8 data bits, no parity, 1 stop bit</strong>, with RTS/CTS enabled.</p><p>Send <code>AT</code> followed by CRLF (<code>\r\n</code>); a responding module returns <code>OK</code>. Use <code>ATI</code> to read its firmware information. This requires UART test firmware or a suitable serial bridge; <code>live_mirror.py</code> currently reads USB capture data.</p></article>
+<article class="note"><h3>Then: UART / data mode</h3><p>After the command test, set the slide switch to <strong>UART / DATA</strong> for the transparent BLE UART service. A host BLE client must connect and enable notifications.</p><p>Keep <code>DFU</code> and other unused pins unconnected. No connection to the Feather <code>RST</code> pin is required. The bridge should use hardware flow control in both modes.</p></article>
+</div>
+<p class="small">The Bluefruit firmware supports higher UART baud settings, but Adafruit notes reliability limitations on the nRF51. Measure end-to-end throughput before using the full screen stream; a fast UART setting does not establish BLE throughput.</p>
+</section>
+
+<section aria-labelledby="setup-title">
+<div class="section-head"><span class="num">04</span><h2 id="setup-title">Connect, power, verify</h2></div>
+<ol class="steps">
+<li class="step"><span class="stepnum">STEP 1</span><h3>Connect with power off</h3><p>If the SPI probe is attached, turn off the display evaluation board first. Then unplug Feather USB and any battery or separate Bluefruit supply. Add the six wires by label.</p></li>
+<li class="step"><span class="stepnum">STEP 2</span><h3>Use the Feather supply</h3><p>Power the Feather by USB before turning the display evaluation board back on. The <strong>3V → VIN</strong> wire powers Bluefruit. The module accepts 3.3 V at VIN; all UART and flow-control signals in this guide use 3.3 V.</p></li>
+<li class="step"><span class="stepnum">STEP 3</span><h3>Run a UART test first</h3><p>Verify <strong>AT → OK</strong> in CMD mode, then test BLE data transfer. The current project firmware needs a UART/BLE bridge addition before these wires carry the screen stream.</p></li>
+</ol>
+<div class="grid" style="margin-top:17px">
+<article class="note"><h3>3–5 V refers to Bluefruit’s input compatibility</h3><p>The Feather RP2040’s GPIOs use 3.3 V logic. Use the 3.3 V connections shown here; do not apply 5 V to a Feather GPIO.</p></article>
+<article class="note"><h3>Keep the display probe input-only</h3><p>The existing probe remains <code>GP10 = DI</code>, <code>GP11 = CLK</code>, <code>GP12 = CS</code>. UART outputs are on separate pins. Power Bluefruit from the Feather, not from the display bus. <a href="wiring.html">Existing SPI probe wiring →</a></p></article>
+</div>
+</section>
+
+<section aria-labelledby="check-title">
+<div class="section-head"><span class="num">05</span><h2 id="check-title">Bench checklist</h2></div>
+<div class="panel"><div class="checklist">
+<label><input type="checkbox"> <span>Feather <strong>3V</strong> connects to Bluefruit <strong>VIN</strong>; GND connects to GND.</span></label>
+<label><input type="checkbox"> <span>Feather <strong>TX/GP0 → RXI</strong>; <strong>RX/GP1 ← TXO</strong>.</span></label>
+<label><input type="checkbox"> <span>Bluefruit <strong>RTS → SDA/GP2</strong> (UART0 CTS input).</span></label>
+<label><input type="checkbox"> <span>Feather <strong>SCL/GP3 → CTS</strong> (UART0 RTS output).</span></label>
+<label><input type="checkbox"> <span>STEMMA QT is unused; MOD and DFU are unconnected; the switch is at <strong>CMD</strong>.</span></label>
+<label><input type="checkbox"> <span>The UART test will enable <strong>RTS/CTS</strong> and start at <strong>9600 8N1</strong>.</span></label>
+</div><div class="check-status" id="check-status" role="status" aria-live="polite">0 / 6 checked · manual wiring reminders, not an electrical test</div></div>
+</section>
+
+<footer class="sources">
+<strong>Verified references</strong> · Adafruit board labels and module directions; Raspberry Pi UART pin functions.
+<ol>
+<li><a href="https://learn.adafruit.com/introducing-the-adafruit-bluefruit-le-uart-friend/pinouts">Bluefruit LE UART Friend pinouts</a> — VIN, TXO/RXI, active-low CTS/RTS, MOD, and DFU.</li>
+<li><a href="https://learn.adafruit.com/adafruit-feather-rp2040-pico/pinouts">Feather RP2040 pinouts</a> — TX=GP0, RX=GP1, SDA=GP2, SCL=GP3; STEMMA QT shares SDA/SCL.</li>
+<li><a href="https://github.com/raspberrypi/pico-sdk/blob/master/src/rp2040/hardware_regs/include/hardware/regs/io_bank0.h">RP2040 SDK GPIO function definitions</a> — GP2 / UART0 CTS and GP3 / UART0 RTS.</li>
+<li><a href="https://learn.adafruit.com/introducing-the-adafruit-bluefruit-le-uart-friend/hardware">Bluefruit UART hardware commands</a> and <a href="https://learn.adafruit.com/introducing-the-adafruit-bluefruit-le-uart-friend/command-mode">command mode</a> — supported baud rates and AT setup.</li>
+</ol>
+<p class="footnote">Prepared for 2nd-screen · 2026-11-01 · This guide is self-contained and works offline. The six-wire map is a proposed UART bridge interface; no Bluetooth bridge firmware has been installed by creating this guide.</p>
+</footer>
+</main>
+<script>
+'use strict';
+document.getElementById('print-button').addEventListener('click', () => window.print());
+const rows = document.querySelectorAll('tr[data-wire]');
+function highlight(id) {
+  document.querySelectorAll('.wire').forEach(wire => {
+    wire.style.opacity = id && wire.dataset.id !== id ? '.18' : '1';
+  });
+}
+rows.forEach(row => {
+  row.addEventListener('mouseenter', () => highlight(row.dataset.wire));
+  row.addEventListener('mouseleave', () => highlight(null));
+  row.addEventListener('focus', () => highlight(row.dataset.wire));
+  row.addEventListener('blur', () => highlight(null));
+});
+const checks = Array.from(document.querySelectorAll('.checklist input'));
+checks.forEach(check => check.addEventListener('change', () => {
+  const completed = checks.filter(input => input.checked).length;
+  document.getElementById('check-status').textContent = `${completed} / ${checks.length} checked · manual wiring reminders, not an electrical test`;
+}));
+</script>
+</body>
+</html>
