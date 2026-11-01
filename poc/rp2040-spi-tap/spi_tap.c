@@ -1,49 +1,57 @@
-// 被動 SPI 擷取（防護評估用）
-// --------------------------------------------------------------------------
-// 用途：在自有點陣顯示評估板的 控制器→螢幕 SPI 匯流排上「高阻抗被動擷取」，
-//       把匯流排位元組原樣倒回主機。還原成畫面文字那一段「不在本程式」
-//       （主機端 live_mirror.py / raster.py，見 docs/2nd-screen.md）。
-//
-// 本程式只做兩件事：
-//   1. 用 PIO 以 CS 為 frame 邊界、在 CLK 邊緣取樣 DI，湊成位元組。
-//   2. 用 DMA 收進緩衝，每填滿一塊就以十六進位經 USB CDC 倒給主機。
-//
-// 全部腳位設為「輸入」，PIO 不驅動任何線（被動、不回寫、不接 MISO）。
-// --------------------------------------------------------------------------
-#include <stdio.h>
+// Passive SPI -> continuous DMA ring -> nonblocking binary USB CDC stream.
+// Probe pins remain input-only, with OEOVER + pad OD locked before USB init.
+#include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/pio.h"
 #include "hardware/dma.h"
+#include "hardware/irq.h"
+#include "hardware/sync.h"
 #include "hardware/structs/padsbank0.h"
+#include "tusb.h"
 #include "spi_tap.pio.h"
+#include "stream_protocol.h"
 
-// ── 腳位設定（對應 Feather RP2040 實際接出的腳；依 Adafruit 原理圖校正）─────
-// 硬體限制：DI 與 CLK 必須相鄰（CLK = DI + 1），見 .pio 的接線慣例。
-// 選 D10/D11/D12（＝GP10/GP11/GP12）：三支相鄰、純數位、無特殊功能、無板上上拉，
-// 適合被動高阻抗搭線。注意 Feather 的「Dn」絲印 ≠ GPIO 編號。
-//   ✗ 不可用 GP4——Feather 未接出（GP4 = USBBOOT）。
-//   ✗ 避開 GP2/GP3——那是 SDA/SCL（I2C/STEMMA），可能帶板上上拉，會載入匯流排。
-#define PIN_DI   10  // IN base：資料線     → Feather 腳 D10
-#define PIN_CLK  11  // IN base + 1：時脈   → Feather 腳 D11
-#define PIN_CS   12  // jmp_pin：晶片選擇   → Feather 腳 D12（低電位有效）
+#define PIN_DI 10
+#define PIN_CLK 11
+#define PIN_CS 12
+#define RING_BITS 15u
+#define RING_SIZE (1u << RING_BITS)
+#define RING_MASK (RING_SIZE - 1u)
+#define FLUSH_US 1000u
+#define HEARTBEAT_US 250000u
 
-// ⚠ 電平：RP2040 輸入高準位門檻約 2.0V。評估板若為 1.8V 訊號，
-//    需加電平轉換/比較器，否則讀不穩（見 docs/2nd-screen.md 前置量測）。
+static uint8_t ring[RING_SIZE] __attribute__((aligned(RING_SIZE)));
+static const uint32_t reload_count = RING_SIZE;
+static volatile uint32_t completed_rings;
+static int data_dma, reload_dma;
 
-// 每塊擷取的字數（每字低 8 bit = 一個位元組）。2048 B ≈ 一張 128×64 全畫面（約 1024 B
-// 像素 + 頁/欄命令）落在單一塊內，倒出延遲約 1～2 次重繪：給 live_mirror.py 做近即時
-// 畫面鏡像用。（先前 16384≈16 幀、4096≈4 幀；要「一次 24 字突發落單一無縫塊」再調大。）
-// SM 於傾印期間停止，會漏掉當下匯流排；需要完全連續擷取時改雙緩衝 ping-pong DMA（見 README）。
-#define CAPTURE_WORDS 2048
-static uint32_t capture_buf[CAPTURE_WORDS];
-
-static void dump_hex(const uint32_t *buf, size_t n) {
-    // 只輸出匯流排位元組（每字取低 8 bit）。純資料，無任何解讀。
-    for (size_t i = 0; i < n; i++) {
-        printf("%02x", (unsigned)(buf[i] & 0xff));
-        if ((i & 31) == 31) putchar('\n');   // 每 32 bytes 換行，方便主機側解析
+// The reload channel restarts data DMA in hardware. IRQ only counts full rings;
+// it does not rearm capture, so USB servicing cannot introduce a rearm gap.
+static void dma_complete(void) {
+    uint32_t bit = 1u << data_dma;
+    if (dma_hw->ints0 & bit) {
+        completed_rings++;
+        dma_hw->ints0 = bit;
     }
-    putchar('\n');
+}
+
+static uint32_t producer_position(uint32_t previous) {
+    for (;;) {
+        uint32_t irq_state = save_and_disable_interrupts();
+        uint32_t cycles = completed_rings;
+        uint32_t before = dma_hw->ints0 & (1u << data_dma);
+        uint32_t index = (dma_hw->ch[data_dma].write_addr - (uintptr_t)ring) & RING_MASK;
+        uint32_t after = dma_hw->ints0 & (1u << data_dma);
+        restore_interrupts(irq_state);
+        if (before != after) continue;
+        uint32_t head = (cycles + (after != 0)) * RING_SIZE + index;
+        // The write address can wrap just before the completion IRQ is raised.
+        // Retry that tiny window instead of reporting a backwards producer.
+        if ((uint32_t)(head - previous) < 0x80000000u) {
+            __dmb();
+            return head;
+        }
+    }
 }
 
 // 把一支腳鎖成「只能輸入、永不驅動」：關上下拉、OEOVER 強制輸出關閉、pad OD=1。
@@ -55,57 +63,119 @@ static void lock_input_only(uint pin) {
     hw_set_bits(&padsbank0_hw->io[pin], PADS_BANK0_GPIO0_OD_BITS);
 }
 
-int main() {
-    // 先把三條探針線鎖成純輸入（在 stdio/USB 等待之前；否則在主機開埠之前，reset
-    // 預設的下拉會一直掛在活匯流排上載入訊號）。
-    // 不呼叫 pio_gpio_init：PIO 的 IN/WAIT/JMP PIN 永遠讀 pad 輸入同步器，與 FUNCSEL
-    // 無關；FUNCSEL=PIO 只是把「輸出」控制權交給 PIO——被動擷取不需要，反而多一條
-    // 驅動路徑（暖開機若殘留 PIO pindirs=輸出，切 FUNCSEL 當下就會驅動匯流排）。
-    gpio_init(PIN_DI);  gpio_set_dir(PIN_DI,  GPIO_IN); lock_input_only(PIN_DI);
-    gpio_init(PIN_CLK); gpio_set_dir(PIN_CLK, GPIO_IN); lock_input_only(PIN_CLK);
-    gpio_init(PIN_CS);  gpio_set_dir(PIN_CS,  GPIO_IN); lock_input_only(PIN_CS);
 
-    stdio_init_all();               // USB CDC
-    while (!stdio_usb_connected())  // 等主機開啟序列埠再開始
-        sleep_ms(100);
+int main(void) {
+    gpio_init(PIN_DI);  gpio_set_dir(PIN_DI, GPIO_IN); lock_input_only(PIN_DI);
+    gpio_init(PIN_CLK); gpio_set_dir(PIN_CLK, GPIO_IN); lock_input_only(PIN_CLK);
+    gpio_init(PIN_CS);  gpio_set_dir(PIN_CS, GPIO_IN); lock_input_only(PIN_CS);
 
     PIO pio = pio0;
-    uint sm  = pio_claim_unused_sm(pio, true);
-    uint off = pio_add_program(pio, &spi_tap_program);
+    uint sm = pio_claim_unused_sm(pio, true);
+    uint program = pio_add_program(pio, &spi_tap_program);
+    pio_sm_set_consecutive_pindirs(pio, sm, PIN_DI, 2, false);
+    pio_sm_set_consecutive_pindirs(pio, sm, PIN_CS, 1, false);
+    pio_sm_config pc = spi_tap_program_get_default_config(program);
+    sm_config_set_in_pins(&pc, PIN_DI);
+    sm_config_set_jmp_pin(&pc, PIN_CS);
+    sm_config_set_in_shift(&pc, false, true, 8);
+    sm_config_set_fifo_join(&pc, PIO_FIFO_JOIN_RX);
+    pio_sm_init(pio, sm, program, &pc);
 
-    // pindirs 設輸入只是向 PIO 明示意圖（FUNCSEL 仍為 SIO，實際由上面的 lock 決定）。
-    pio_sm_set_consecutive_pindirs(pio, sm, PIN_DI, 2, false);  // DI, CLK = 輸入
-    pio_sm_set_consecutive_pindirs(pio, sm, PIN_CS, 1, false);  // CS     = 輸入
+    data_dma = dma_claim_unused_channel(true);
+    reload_dma = dma_claim_unused_channel(true);
+    dma_channel_config dc = dma_channel_get_default_config(data_dma);
+    channel_config_set_transfer_data_size(&dc, DMA_SIZE_8);
+    channel_config_set_read_increment(&dc, false);
+    channel_config_set_write_increment(&dc, true);
+    channel_config_set_ring(&dc, true, RING_BITS);
+    channel_config_set_dreq(&dc, pio_get_dreq(pio, sm, false));
+    channel_config_set_chain_to(&dc, reload_dma);
+    channel_config_set_high_priority(&dc, true);
+    dma_channel_configure(data_dma, &dc, ring, &pio->rxf[sm], RING_SIZE, false);
 
-    pio_sm_config c = spi_tap_program_get_default_config(off);
-    sm_config_set_in_pins(&c, PIN_DI);       // IN base = DI（CLK = DI+1）
-    sm_config_set_jmp_pin(&c, PIN_CS);       // jmp pin = CS
-    sm_config_set_in_shift(&c, false, true, 8);  // MSB-first、autopush、門檻 8 bit
-    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);  // 併 TX FIFO 進 RX，加深緩衝
-    pio_sm_init(pio, sm, off, &c);
+    dma_channel_config rc = dma_channel_get_default_config(reload_dma);
+    channel_config_set_transfer_data_size(&rc, DMA_SIZE_32);
+    channel_config_set_read_increment(&rc, false);
+    channel_config_set_write_increment(&rc, false);
+    dma_channel_configure(reload_dma, &rc,
+                          &dma_hw->ch[data_dma].al1_transfer_count_trig,
+                          &reload_count, 1, false);
+    dma_hw->ints0 = 1u << data_dma;
+    dma_channel_set_irq0_enabled(data_dma, true);
+    irq_set_exclusive_handler(DMA_IRQ_0, dma_complete);
+    irq_set_enabled(DMA_IRQ_0, true);
+    pio->fdebug = 1u << (PIO_FDEBUG_RXSTALL_LSB + sm);
+    dma_channel_start(data_dma);
+    pio_sm_set_enabled(pio, sm, true);
+    tusb_init();
 
-    // DMA：RX FIFO → capture_buf，受 PIO RX DREQ 節流。
-    int dma_ch = dma_claim_unused_channel(true);
-    dma_channel_config dc = dma_channel_get_default_config(dma_ch);
-    channel_config_set_transfer_data_size(&dc, DMA_SIZE_32);
-    channel_config_set_read_increment(&dc, false);       // 固定讀 FIFO
-    channel_config_set_write_increment(&dc, true);        // 寫入遞增
-    channel_config_set_dreq(&dc, pio_get_dreq(pio, sm, false));  // RX DREQ
-
-    printf("# spi_tap ready (DI=GP%d CLK=GP%d CS=GP%d) — bytes only, no decode\n",
-           PIN_DI, PIN_CLK, PIN_CS);
+    uint32_t head = 0, tail = 0, dropped = 0, stalls = 0, epoch = 0, sequence = 0;
+    uint32_t last_send = time_us_32();
+    bool was_connected = false, session_start = true;
+    uint8_t packet[TAP_PACKET_SIZE], payload[TAP_MAX_PAYLOAD];
+    size_t tx_length = 0, tx_sent = 0;
 
     for (;;) {
-        dma_channel_configure(dma_ch, &dc,
-                              capture_buf,              // 目的
-                              &pio->rxf[sm],            // 來源：RX FIFO
-                              CAPTURE_WORDS,            // 數量
-                              false);
-        pio_sm_set_enabled(pio, sm, true);
-        dma_channel_start(dma_ch);
-        dma_channel_wait_for_finish_blocking(dma_ch);  // 等這塊填滿
-        pio_sm_set_enabled(pio, sm, false);
+        tud_task();
+        head = producer_position(head);
+        uint32_t stall_bit = 1u << (PIO_FDEBUG_RXSTALL_LSB + sm);
+        if (pio->fdebug & stall_bit) {
+            pio->fdebug = stall_bit;
+            stalls++;
+            epoch++;
+            // Conservatively discard backlog around a detected sampling fault.
+            dropped += head - tail;
+            tail = head;
+        }
+        bool connected = tud_cdc_connected();
+        if (!connected) {
+            dropped += head - tail;
+            tail = head;
+            if (was_connected) epoch++;
+            was_connected = false;
+            tx_length = tx_sent = 0;
+            continue;
+        }
+        if (!was_connected) {
+            // A new reader starts with a status record and explicit continuity reset.
+            epoch++;
+            session_start = true;
+            was_connected = true;
+            last_send = time_us_32() - HEARTBEAT_US;
+        }
+        uint32_t available = head - tail;
+        if (available > RING_SIZE - TAP_MAX_PAYLOAD) {
+            dropped += available;
+            tail = head;
+            epoch++;
+            available = 0;
+        }
 
-        dump_hex(capture_buf, CAPTURE_WORDS);          // 倒回主機，再抓下一塊
+        if (tx_sent < tx_length) {
+            uint32_t capacity = tud_cdc_write_available();
+            uint32_t remaining = (uint32_t)(tx_length - tx_sent);
+            if (capacity > remaining) capacity = remaining;
+            if (capacity) tx_sent += tud_cdc_write(packet + tx_sent, capacity);
+            tud_cdc_write_flush();
+            continue;
+        }
+        uint32_t now = time_us_32();
+        if (session_start || available >= TAP_MAX_PAYLOAD ||
+            (available && (uint32_t)(now - last_send) >= FLUSH_US) ||
+            (uint32_t)(now - last_send) >= HEARTBEAT_US) {
+            uint16_t count = session_start ? 0 : (available > TAP_MAX_PAYLOAD ? TAP_MAX_PAYLOAD : available);
+            uint32_t offset = tail;
+            for (unsigned i = 0; i < count; ++i) payload[i] = ring[(tail + i) & RING_MASK];
+            // DMA keeps running during the copy. Reject a copy overtaken by DMA.
+            head = producer_position(head);
+            if (head - tail > RING_SIZE - TAP_MAX_PAYLOAD) continue;
+            tx_length = tap_packet(packet, count ? TAP_DATA : TAP_STATUS,
+                                   session_start ? TAP_SESSION_START : 0,
+                                   payload, count, sequence++, now, offset, epoch, dropped, stalls);
+            tx_sent = 0;
+            tail += count;
+            session_start = false;
+            last_send = now;
+        }
     }
 }

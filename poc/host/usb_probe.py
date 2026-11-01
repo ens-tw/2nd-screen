@@ -21,6 +21,9 @@ import select
 import subprocess
 import sys
 import time
+import tty
+
+from spi_stream import STATUS, StreamParser
 
 # RP2040 / Adafruit 相關的 USB vendor id（十進位）。
 VID_RASPBERRY = 11914   # 0x2E8A，RP2 開機（BOOTSEL）與原生 pico-sdk 裝置
@@ -115,16 +118,32 @@ def find_running_ports():
     return uniq
 
 
-def read_port(dev, seconds):
+def read_port(dev, seconds, binary=False):
     """開序列埠讀 seconds 秒，原樣印到 stdout。USB CDC 的 baud 會被忽略。"""
     try:
         fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK | os.O_NOCTTY)
+        if os.isatty(fd):
+            tty.setraw(fd)
     except OSError as e:
         print(f"  無法開啟 {dev}：{e}")
         return
     print(f"  讀取 {dev}（{seconds:.0f}s）——")
     deadline = time.time() + seconds
     got = 0
+    def show_data(data):
+        for i in range(0, len(data), 32):
+            print(data[i:i + 32].hex(), flush=True)
+
+    def show_gap(reason):
+        print(f'\n# STP2 continuity reset: {reason}', flush=True)
+
+    def show_event(kind, **fields):
+        if kind == 'stream_packet' and fields['packet_type'] == STATUS:
+            print(f"# STP2 seq={fields['sequence']} offset={fields['device_offset']} "
+                  f"epoch={fields['loss_epoch']} dropped={fields['dropped_total']} "
+                  f"stalls={fields['stall_events']}", flush=True)
+
+    stream = StreamParser(show_data, show_gap, show_event)
     try:
         while time.time() < deadline:
             r, _, _ = select.select([fd], [], [], 0.3)
@@ -134,10 +153,15 @@ def read_port(dev, seconds):
                 except OSError:
                     break
                 if chunk:
-                    sys.stdout.buffer.write(chunk)
-                    sys.stdout.buffer.flush()
+                    if binary:
+                        stream.feed(chunk)
+                    else:
+                        sys.stdout.buffer.write(chunk)
+                        sys.stdout.buffer.flush()
                     got += len(chunk)
     finally:
+        if binary:
+            stream.finish()
         os.close(fd)
     if got == 0:
         print("\n  （期間沒有資料——韌體閒置中？CS 為高時沒有 SPI 活動就不會輸出。）")
@@ -173,9 +197,9 @@ def main():
         for name, vid, dev in ports:
             print(f"  {dev}   [{name}, vid=0x{vid:04x}]")
         if do_read:
-            read_port(ports[0][2], seconds)
+            read_port(ports[0][2], seconds, binary='Stream v2' in ports[0][0])
         else:
-            print("  用 `--read [秒數]` 讀出韌體輸出（啟動時會印 banner；有 SPI 活動才會有 hex）。")
+            print("  用 `--read [秒數]` 檢視輸出（新版顯示 STP2 status／payload hex；原始存檔用 live_mirror.py）。")
         return 0
 
     print("狀態：ABSENT — USB 上找不到 RP2040。")

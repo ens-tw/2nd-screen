@@ -17,6 +17,16 @@ pico_sdk_init()
 
 add_executable(spi_tap
     spi_tap.c
+    ${PICO_SDK_PATH}/src/rp2_common/pico_stdio_usb/stdio_usb_descriptors.c
+)
+target_include_directories(spi_tap PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+target_compile_definitions(spi_tap PRIVATE
+    USBD_PRODUCT="SPI Tap Stream v2"
+    PICO_STDIO_USB_USE_DEFAULT_DESCRIPTORS=1
+    PICO_ENABLE_USB_RESET_VIA_VENDOR_INTERFACE=1
+    PICO_USB_RESET_INCLUDE_DEFAULT_APP_DRIVER_CB=1
+    PICO_USB_RESET_SUPPORT_MS_OS_20_DESCRIPTOR=1
+    PICO_USB_RESET_MS_OS_20_DESCRIPTOR_ITF=2
 )
 
 # PIO 程式在建置時組譯成標頭
@@ -26,10 +36,14 @@ target_link_libraries(spi_tap
     pico_stdlib
     hardware_pio
     hardware_dma
+    tinyusb_device
+    pico_stdio_usb_headers
+    pico_usb_reset
+    pico_unique_id
 )
 
 # 透過 USB CDC 把擷取結果倒回主機；不用 UART。
-pico_enable_stdio_usb(spi_tap 1)
+pico_enable_stdio_usb(spi_tap 0)
 pico_enable_stdio_uart(spi_tap 0)
 
 pico_add_extra_outputs(spi_tap)

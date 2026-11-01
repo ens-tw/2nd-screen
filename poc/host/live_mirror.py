@@ -14,7 +14,7 @@
 #          Both share the same vertical-column-packing reconstruction.
 #
 # Usage (run in your own terminal; the in-place redraw needs a real TTY):
-#   1) Flash spi_tap first (block size already tuned to 2048 for low latency):
+#   1) Flash spi_tap first (continuous DMA + binary streaming):
 #        picotool load -x -f poc/build/spi-tap/spi_tap.uf2
 #   2) python3 poc/host/live_mirror.py              # connect to the board, mirror live, Ctrl-C to quit
 #      python3 poc/host/live_mirror.py --page       # page-sequence mode (the default)
@@ -22,8 +22,7 @@
 #      python3 poc/host/live_mirror.py --file cap.txt  # no board, replay a capture file (for verification)
 #      python3 poc/host/live_mirror.py --seconds 20  # exit after a fixed time (static output when not a TTY)
 #      python3 poc/host/live_mirror.py --capture _output/pin-test.txt  # exact input + diagnostic events
-# Standard library only; reads usb_probe.py's output format (up to 32 B of hex per
-# line, ignoring banners and other non-hex lines).
+# Standard library only; autodetects STP2 binary packets and legacy hex captures.
 import argparse
 from datetime import datetime, timezone
 import json
@@ -34,11 +33,13 @@ import re
 import select
 import sys
 import time
+import tty
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from usb_probe import find_running_ports          # noqa: E402  (tool in the same directory)
 from raster import render_frame, FRAME, W, H       # noqa: E402
+from spi_stream import MAGIC, StreamParser        # noqa: E402
 
 RECENT = 4096          # enough for several complete page sequences
 PAGE_STRIDE = W + 1    # measured capture: one page opcode, then 128 pixel bytes
@@ -179,19 +180,23 @@ class MirrorDecoder:
     def finish(self):
         self.discard(len(self.pending), 'end-of-input')
 
+    def break_stream(self, reason):
+        self.discard(len(self.pending), reason)
+
     def feed_line(self, line):
-        added = feed_hex(line, self.pending)
-        if not added:
-            # Firmware emits a blank line after each DMA dump. Capture stops
-            # during that dump, so bytes on either side may not be contiguous.
-            # Invalid lines/banners also break continuity; preserve the last
-            # complete frame until a fresh complete sequence arrives.
+        data = bytearray()
+        if not feed_hex(line, data):
             reason = 'dump-boundary' if not line.strip() else 'non-hex-line'
-            self.discard(len(self.pending), reason)
+            self.break_stream(reason)
             self.event(reason, after_bus_offset=self.received, serial_line_hex=line.hex())
             return
-        self.received += added
-        self.covered.extend(b'\x00' * added)
+        self.feed_bus(data)
+
+    def feed_bus(self, data):
+        # Binary USB chunks are contiguous across reads; only reported loss resets.
+        self.pending.extend(data)
+        self.received += len(data)
+        self.covered.extend(b'\x00' * len(data))
         if len(self.pending) > RECENT:
             self.discard(len(self.pending) - RECENT, 'buffer-limit')
         match = find_page_frame(self.pending) if self.use_page else None
@@ -211,6 +216,53 @@ class MirrorDecoder:
         if frame is not None and frame != self.frame:
             self.frame = frame
             self.revision += 1
+
+
+class CaptureInput:
+    """Autodetect new binary streams and preserve legacy hex-file replay."""
+
+    def __init__(self, decoder):
+        self.decoder = decoder
+        self.mode = None
+        self.pending = bytearray()
+        self.stream = StreamParser(decoder.feed_bus, decoder.break_stream, decoder.diagnostics)
+
+    def feed(self, chunk):
+        if self.mode == 'binary':
+            self.stream.feed(chunk)
+            return
+        self.pending.extend(chunk)
+        if self.mode is None:
+            if MAGIC in self.pending or len(self.pending) > 4096:
+                self.mode = 'binary'
+                self.decoder.event('transport_detected', mode=self.mode)
+                self.stream.feed(self.pending)
+                self.pending.clear()
+                return
+            if b"\n" not in self.pending:
+                return
+            line = self.pending.partition(b"\n")[0]
+            try:
+                text = line.decode('utf-8')
+            except UnicodeDecodeError:
+                return
+            if not all(char.isprintable() or char in '\t\r' for char in text):
+                return
+            self.mode = 'legacy-hex'
+            self.decoder.event('transport_detected', mode=self.mode)
+        while b"\n" in self.pending:
+            line, _, self.pending = self.pending.partition(b"\n")
+            self.decoder.feed_line(line)
+
+    def finish(self, replay=False):
+        if self.mode == 'binary':
+            self.stream.finish()
+        elif self.pending:
+            if replay:
+                self.decoder.feed_line(self.pending)
+            else:
+                self.decoder.event('partial_serial_line', hex=self.pending.hex())
+            self.pending.clear()
 
 
 def mode_label(use_page):
@@ -233,9 +285,11 @@ def report_capture(capture):
 
 
 def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
-    tty = sys.stdout.isatty()
+    terminal = sys.stdout.isatty()
     try:
         fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK | os.O_NOCTTY)
+        if os.isatty(fd):
+            tty.setraw(fd)  # binary bytes must bypass echo, CR/LF conversion and IXON
     except OSError as e:
         print(f"Cannot open {dev}: {e}")
         return 1
@@ -247,10 +301,10 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
         return 1
     report_capture(capture)
     decoder = MirrorDecoder(use_page, capture.event)
-    linebuf = bytearray()
+    reader = CaptureInput(decoder)
     deadline = (time.monotonic() + seconds) if seconds else None
     last_render, frames, rendered_revision = 0.0, 0, -1
-    if tty:
+    if terminal:
         sys.stdout.write(_ALT_ON + _CUR_OFF)
         sys.stdout.flush()
     try:
@@ -266,10 +320,7 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
                 if not chunk:
                     break
                 capture.write(chunk)
-                linebuf += chunk
-                while b"\n" in linebuf:
-                    line, _, linebuf = linebuf.partition(b"\n")
-                    decoder.feed_line(line)
+                reader.feed(chunk)
             now = time.monotonic()
             if (now - last_render >= RENDER_INTERVAL and decoder.frame is not None
                     and decoder.revision != rendered_revision):
@@ -277,7 +328,7 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
                 frames += 1
                 status = (f"updates={frames}  received={decoder.received}B  "
                           f"{mode_label(use_page)}  (Ctrl-C to quit)")
-                if tty:
+                if terminal:
                     sys.stdout.write(_HOME + box(art, status, color=True))
                 else:
                     sys.stdout.write("\n" + box(art, status, color=False))
@@ -289,15 +340,14 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
         pass
     finally:
         try:
-            if linebuf:
-                capture.event('partial_serial_line', hex=linebuf.hex())
+            reader.finish()
             decoder.finish()
         finally:
             try:
                 capture.close()
             finally:
                 os.close(fd)
-                if tty:
+                if terminal:
                     sys.stdout.write(_CUR_ON + _ALT_OFF)
                     sys.stdout.flush()
                 report_capture(capture)
@@ -312,19 +362,22 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
 def run_file(path, use_page=True, capture_path=None):
     capture = None
     decoder = MirrorDecoder(use_page)
+    reader = CaptureInput(decoder)
     try:
         with open(path, 'rb') as source:
             capture = CaptureLog(capture_path, source='replay') if capture_path is not None else None
             decoder = MirrorDecoder(use_page, capture.event if capture is not None else None)
-            for line in source:
+            reader = CaptureInput(decoder)
+            while chunk := source.read(4096):
                 if capture is not None:
-                    capture.write(line)
-                decoder.feed_line(line)
+                    capture.write(chunk)
+                reader.feed(chunk)
     except OSError as error:
         print(f"Cannot read {path}: {error}")
         return 1
     finally:
         try:
+            reader.finish(replay=True)
             decoder.finish()
         finally:
             if capture is not None:

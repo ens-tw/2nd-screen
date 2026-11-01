@@ -23,7 +23,7 @@
 
 - `docs/2nd-screen.md`：主文件——量測與真機結果、接線、資料率模型、重建方法、即時第二螢幕、demo 腳本。
 - `poc/rp2040-spi-tap/`：RP2040 被動擷取韌體。
-  - `spi_tap.c` / `.pio`：PIO 以 CS 為 frame 邊界、CLK 邊緣取樣 DI，DMA 收進緩衝、USB CDC 以 hex 倒出。
+  - `spi_tap.c` / `.pio`：PIO 以 CS 為 frame 邊界、CLK 邊緣取樣 DI，連續 DMA ring 收進緩衝、USB CDC 以 STP2 binary 串流（有 CRC／序號／loss epoch）。
   - `bus_probe.c`：無示波器診斷——PWM 硬體計 CLK 上升緣，用真輸入門檻判斷「這條匯流排讀不讀得到」。
   - `loopback_test.c`：on-chip 自測（同板自驅自讀），驗證擷取鏈；不可在接著目標板時燒（它會驅動腳位）。
   - `CMakeLists.txt`、`wiring.html`、`ref/`（Feather 腳位定位圖）。
@@ -46,7 +46,7 @@ export PICO_SDK_PATH=$HOME/pico-sdk
 cmake -S poc/rp2040-spi-tap -B poc/build/spi-tap -G Ninja -DPICO_BOARD=adafruit_feather_rp2040
 ninja -C poc/build/spi-tap spi_tap bus_probe
 picotool load -x -f poc/build/spi-tap/spi_tap.uf2
-python3 poc/host/live_mirror.py          # 第二螢幕；--page 改頁命令對齊；--file 重播擷取檔
+python3 poc/host/live_mirror.py          # 第二螢幕；--page 為預設頁序列模式；--file 重播擷取檔
 ```
 
 - ⚠ 近期 macOS 會把 `RPI-RP2` 掛成唯讀，拖放 `.uf2` 失敗，故用 picotool。

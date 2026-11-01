@@ -60,7 +60,7 @@ sample:
     jmp  sample
 ```
 
-`spi_tap.c` 把三支探針腳全設輸入、以 OEOVER/OD 硬體鎖成永不驅動（純被動），DMA 收滿一塊（預設 2048 B，低延遲）就經 USB CDC 以 hex 倒出。預設 SPI mode 0；實測極性不同就改 `.pio` 的 `wait` 邊緣。
+`spi_tap.c` 把三支探針腳全設輸入、以 OEOVER/OD 硬體鎖成永不驅動（純被動），DMA 持續收進 32 KiB ring，USB CDC 以 STP2 binary 小封包傳送（payload 上限 256 B，短尾 flush 目標 1 ms）；擷取不因 USB 傳送停止。預設 SPI mode 0；實測極性不同就改 `.pio` 的 `wait` 邊緣。
 
 ### 擷取鏈自測（P-1，晶片內 loopback，無外接跳線）
 
@@ -104,11 +104,11 @@ round 0: PASS  (0/16384 bytes mismatch)
 - 不將孤立 `0xBn` 當頁起點，不跳過 `0x00`、`0x10` 等有效像素。
 - 空行表示 firmware dump 邊界；不跨邊界拼幀，保留上一個完整畫面直到取得新幀。資料相同時不重繪。
 
-**[限制]** 此格式不涵蓋只有局部頁更新或插入欄命令的其他協定。韌體傾印時停止擷取，可能漏掉某次畫面；主機修正不能補回漏掉的 bytes。完整 framebuffer 的頁／欄起點已依捕獲序列定位，與照片的精確像素對齊仍待確認。
+**[限制]** 此顯示格式解碼不涵蓋只有局部頁更新或插入欄命令的其他協定。舊韌體傾印時停止擷取，可能漏掉某次畫面；主機修正不能補回漏掉的 bytes。完整 framebuffer 的頁／欄起點已依捕獲序列定位，與照片的精確像素對齊仍待確認。
 
 ### 保留被篩掉的資料與時間資訊
 
-**[證實：程式與回歸測試]** `live_mirror.py` 即時執行時，預設將收到的每個 serial chunk **先存檔，再解析**，存至 `_output/captures/mirror-<UTC>-<unique>.txt`。含 banner、空行、不合 hex 格式的內容，以及退出時未收完一行的 bytes；不是終端 ASCII 畫面截圖。可以指定檔名（不覆寫既有檔案）：
+**[證實：程式與回歸測試]** `live_mirror.py` 即時執行時，預設將收到的每個 serial chunk（新版為 binary，舊版為 hex 文字）**先存檔，再解析**，存至 `_output/captures/mirror-<UTC>-<unique>.txt`。含 banner、空行、不合 hex 格式的內容，以及退出時未收完一行的 bytes；不是終端 ASCII 畫面截圖。可以指定檔名（不覆寫既有檔案）：
 
 ```bash
 # 分別記錄左右移動游標、screensaver 喚醒兩個情境；Ctrl-C 結束並完成紀錄。
@@ -122,7 +122,23 @@ python3 poc/host/live_mirror.py --file _output/pin-cursor-01.txt \
 
 旁邊的 `<capture>.events.jsonl` 記錄：serial chunk 的檔案 offset／長度／主機相對時間、完整 frame 的匯流排 offset、實際 render 時間，以及在 dump 邊界、buffer 裁切、退出時**未用於完整 frame 的所有 bus bytes**（`unmatched_bus_bytes`，含 `hex`、`bus_offset`、`reason`）。不將這些 bytes 一律判成雜訊或命令；可能包含初始化、其他協定或被截斷的畫面。`non-hex-line` 與 `partial_serial_line` 另留原始 bytes。檔案與事件逐次 flush；收到完整畫面以前亦會存檔。重播紀錄的 `source` 為 `replay`，其時間代表重播速度，不能當成原始擷取時間。
 
-**[證實：程式檢查]** firmware 仍等待 2048 B 收滿才送出，且 USB 傾印期間停止 PIO。單次全畫面約 1039 B（含 frame 前綴），可能留在尚未滿的 buffer 裡；主機紀錄只能保存 firmware 實際送達的資料。先前 47 個 dump 各只有一個完整八頁序列，與「約半數更新能鏡像」的觀察相符；**[推測]** 游標／喚醒漏鏡像可能來自等待收滿或漏擷取，尚不能認定為局部更新。終端重繪上限已由約 6.7 Hz 提高為 30 Hz；這不會補回 firmware 沒送出的資料。下一步宜先驗證持續 DMA 擷取、短週期送出及 overflow 計數，再決定是否需要局部更新解碼。
+**[證實：舊版程式檢查]** 舊 firmware 等待 2048 B 收滿才送出，且 USB 傾印期間停止 PIO。單次全畫面約 1039 B（含 frame 前綴），可能留在尚未滿的 buffer 裡；主機紀錄只能保存 firmware 實際送達的資料。先前 47 個 dump 各只有一個完整八頁序列，與「約半數更新能鏡像」的觀察相符；**[推測]** 游標／喚醒漏鏡像可能來自等待收滿或漏擷取，尚不能認定為局部更新。終端重繪上限已由約 6.7 Hz 提高為 30 Hz；這不會補回 firmware 沒送出的資料。現已改為持續 DMA 與短週期送出（見下節）；是否需要局部更新解碼仍須依新的完整擷取判定。
+
+### 連續串流韌體（STP2）
+
+**[證實：建置與程式檢查]** `spi_tap.c` 使用 byte DMA 寫入 32 KiB、自然對齊的循環 buffer。第二條 DMA channel 在 ring 完成時以硬體重啟資料 DMA；IRQ 只計數 ring 次數，不負責即時 rearm。PIO 持續取樣，USB 由主迴圈以 TinyUSB 可用空間非阻塞送出，沒有每 byte `printf`。三條探針仍保持輸入、OEOVER 強制關輸出與 pad OD；不切到 PIO 輸出功能。
+
+- 每包 payload 最多 256 B；有資料時目標每 1 ms flush 短尾，即使只有單次重繪也不等待下一個畫面。
+- 空閒時每 250 ms 送 status heartbeat；主機／USB 排程不提供硬即時延遲保證。
+- ring 接近追上尚未消費資料時，保守丟棄該 backlog，累計 `dropped_total` 並遞增 `loss_epoch`。主機太慢或未連線時不能保證零遺失。
+- `stall_events` 計數 PIO RXSTALL sticky flag 的觀察次數；不是精確漏 bit／byte 數。若發生 stall，像素／位元組對齊亦可能失效，不能僅靠清 counter 宣稱已恢復。
+- 新讀取 session、sequence／offset 不連續、epoch／drop／stall counter 改變或 CRC resync，才中斷主機組幀；USB 封包邊界不會中斷組幀。
+
+線上格式為 32 B little-endian header：`<4sBBHIIIIII`，依序為 `STP2`、type（1=data、2=status）、flags（bit0=session start）、payload 長度、packet sequence、device timestamp（us）、device byte offset、loss epoch、dropped total、stall events；後接 payload，再接 4 B IEEE CRC32（header+payload）。32-bit counters／時間會回繞，序號與 offset 以模 2³² 檢查。device offset 含已知 ring 丟棄 bytes；診斷裡的 host `bus_offset` 則只計已交付解碼的 bytes，兩者須區分。
+
+`live_mirror.py` 自動辨識 STP2 或舊版 hex。新 `.bin`／`.txt` capture 都是逐 byte 原始存檔，副檔名不決定格式；terminal ASCII 僅是顯示層。`usb_probe.py --read` 對新版輸出可讀 hex／status，**不是**原始 binary 存檔方式。`raster.py` 仍只讀 hex，binary 重播請用 `live_mirror.py --file <capture>`。
+
+**[證實：Feather RP2040 燒錄與 45 秒實測]** `picotool load -v -x -f` 完成燒錄、逐 byte 驗證及重開，USB product 為 `SPI Tap Stream v2`。本機 `_output/screen1/stream-v2-bench-01.bin` 共 546,447 B 原始 serial 資料，解出 2,710 包、448,849 B 匯流排 payload、432 個完整畫面，終端亦實際重繪 432 次（本次約 9.6 fps）。期間無 CRC／header 錯誤、`dropped_total` 增量 0、`stall_events` 增量 0、loss epoch 固定；開始讀取時有一次途中接入的 transport resync。device offset 跨過多次 32 KiB ring 邊界而保持連續，亦收到 1 B 短尾封包。以每 113 B 重新切割原始檔重播，payload 與 framebuffer 重建一致；統計存於 `stream-v2-validation-01.json`。這是此樣本的量測，不代表任意 SPI 負載均不會 overflow，也尚未獨立確認兩種按鍵情境。
 
 ### 用照片建立像素參考，再核對 SPI 起點
 
@@ -146,7 +162,7 @@ python3 poc/host/compare_reference.py capture.txt _output/screen1/reference.bin 
 
 比較工具以遮罩後的像素 Hamming distance 排出每頁候選位址，附前後各 8 B 以查找頁／欄命令；位址單位是解碼後的**匯流排 bytes**。頁面各自比對，可能來自不同重繪，不能僅憑最低誤差就宣稱鎖定一個完整 frame。可用 `--shift-x N --shift-y N` 檢驗照片黑邊的候選位移；平移新露出的像素不參與比對。
 
-**[待驗證]** 已收到裝置 SPI 樣本並依頁序列修正同步規則；照片參考與同一畫面的精確比對、欄偏移與面板顯示方向仍待確認。`spi_tap.c` 現有每 2048 B 停止 SM 傾印的行為亦可能漏資料（程式註解已說明），不能將所有相鄰 USB 區塊一律視為無縫匯流排。
+**[待驗證]** 已收到裝置 SPI 樣本並依頁序列修正同步規則；照片參考與同一畫面的精確比對、欄偏移與面板顯示方向仍待確認。舊版 2048 B dump 之間不能視為無縫匯流排；新版 STP2 則依序號、byte offset、loss epoch 與 CRC 決定連續性。
 
 驗證工具：`python3 -m unittest discover -s poc/host -p 'test_*.py' -v`（含鏡像與照片參考的回歸測試）。
 

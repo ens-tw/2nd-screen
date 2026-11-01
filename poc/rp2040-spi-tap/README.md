@@ -6,7 +6,7 @@
 ## 檔案
 
 - `spi_tap.pio` — PIO 擷取程式：CS 為 frame 邊界，CLK 邊緣取樣 DI，autopush 成位元組。
-- `spi_tap.c` — SDK 初始化、PIO/DMA 設定、USB CDC 以十六進位倒出擷取資料。
+- `spi_tap.c` — SDK 初始化、PIO/DMA 設定、連續 DMA ring 擷取，以 STP2 binary 封包經 USB CDC 串流。
 - `CMakeLists.txt` — 建置設定（板子預設 `adafruit_feather_rp2040`）。
 - `wiring.html` — 接線圖：Feather RP2040 探針腳位示意 ＋ 腳位對照表、安全護欄、燒錄／讀取指令。用 `qlmanage -p wiring.html` 或瀏覽器開啟。
 - `ref/` — 定位用原圖：`feather-rp2040-pinout-annotated.png`（Adafruit 官方 PrettyPins，已圈出 D10/D11/D12/GND 搭線腳）。目標評估板側的 SPI 測試點（DI/CLK/CS/GND）請依該板資料手冊／原理圖定位。
@@ -36,7 +36,7 @@ ninja -C "$OUT" spi_tap
    ⚠ 近期 macOS（fskit 的 msdos 驅動）會把 `RPI-RP2` 掛成**唯讀**，拖放 `.uf2` 會以 `Read-only file system` 失敗，故改用 picotool（`brew install picotool`）。舊環境仍可拖放。
    ⚠ **端點防護（Jamf EDR 等）會擋 picotool 的「軟體進 BOOTSEL」**：`picotool reboot -f -u` / `picotool load -f` 會回報「no accessible RP-series devices in BOOTSEL mode」，裝置一直回到序列埠、`RPI-RP2` 也不掛載。此時**改用實體按鈕進 BOOTSEL**（上行步驟 1），再跑不帶 `-f` 的 `picotool load -x <uf2>`。在未裝 EDR 的機器上軟體燒錄即可。
 1. 接線見 `docs/2nd-screen.md`（DI/CLK/CS/GND 四條，被動高阻抗）。
-1. 讀取：`python3 poc/host/usb_probe.py --read`——自動找出 RP2040 序列埠並印出韌體輸出。啟動 banner 需開埠才會印；要有 SPI 活動才有 hex（每 32 bytes 換行）。板子狀態不明時先跑不帶參數的 `usb_probe.py`（回報 BOOTSEL／RUNNING／ABSENT）。
+1. 讀取：`python3 poc/host/usb_probe.py --read`——自動找出 RP2040 序列埠並印出韌體輸出。新版 binary 串流由 `usb_probe.py` 解碼成 hex 並列出狀態；每 250 ms 有 heartbeat，SPI 活動才有 payload。完整原始 binary 擷取請用 `live_mirror.py --capture`。板子狀態不明時先跑不帶參數的 `usb_probe.py`（回報 BOOTSEL／RUNNING／ABSENT）。
 
 ## 接線提醒
 
