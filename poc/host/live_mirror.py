@@ -1,81 +1,221 @@
 #!/usr/bin/env python3
-# 即時畫面鏡像（PoC 主效果）——被動 SPI 擷取 → 即時 ASCII 重現評估板畫面。
+# Live screen mirror (the PoC's main effect): passive SPI capture -> live ASCII
+# reproduction of the eval board's display.
 # ---------------------------------------------------------------------------
-# 把 spi_tap 經 USB CDC 連續倒出的真匯流排位元組，邊收邊重建 framebuffer、在終端
-# **原地重繪**成 128×64 的 ASCII「螢幕」。你在評估板上切畫面，這裡幾乎同步跟著變——
-# 這就是 docs/2nd-screen.md 的 PoC 目標：證明被動搭四條線即可旁觀顯示內容。
-# 純畫面鏡像、不含任何內容解讀邏輯。
+# Takes the real bus bytes spi_tap streams continuously over USB CDC, rebuilds the
+# framebuffer as they arrive, and **redraws in place** as a 128x64 ASCII "screen" in
+# the terminal. Switch screens on the eval board and this follows almost in sync.
+# This is the PoC goal from docs/2nd-screen.md: show that passively tapping four
+# wires is enough to watch what is on the display.
+# Pixel mirroring only; contains no content-interpretation logic.
 #
-# 對照：raster.py = 單張靜態還原（檔案）；本檔 = 即時串流鏡像（活體）。
-#       兩者共用「垂直欄打包」的重建。
+# Compare: raster.py = single static reconstruction (from a file);
+#          this file = live streaming mirror.
+#          Both share the same vertical-column-packing reconstruction.
 #
-# 用法（在你自己的終端跑，要真 TTY 才有原地重繪動畫）：
-#   1) 先燒 spi_tap（block 已調成 2048 低延遲）：
+# Usage (run in your own terminal; the in-place redraw needs a real TTY):
+#   1) Flash spi_tap first (block size already tuned to 2048 for low latency):
 #        picotool load -x -f poc/build/spi-tap/spi_tap.uf2
-#   2) python3 poc/host/live_mirror.py              # 連上板子、即時鏡像，Ctrl-C 離開
-#      python3 poc/host/live_mirror.py --page       # 改用「頁命令對齊」重建（偏移嚴重時試）
-#      python3 poc/host/live_mirror.py --file cap.txt  # 不連板子，重播一個擷取檔（驗證用）
-#      python3 poc/host/live_mirror.py --seconds 20  # 跑固定秒數後退出（非 TTY 自動靜態輸出）
-# 純標準庫；吃 usb_probe.py 的輸出格式（每行最多 32 B 十六進位，忽略 banner 等非 hex 行）。
+#   2) python3 poc/host/live_mirror.py              # connect to the board, mirror live, Ctrl-C to quit
+#      python3 poc/host/live_mirror.py --page       # page-sequence mode (the default)
+#      python3 poc/host/live_mirror.py --raw        # latest 1024 bytes, explicitly unaligned
+#      python3 poc/host/live_mirror.py --file cap.txt  # no board, replay a capture file (for verification)
+#      python3 poc/host/live_mirror.py --seconds 20  # exit after a fixed time (static output when not a TTY)
+#      python3 poc/host/live_mirror.py --capture _output/pin-test.txt  # exact input + diagnostic events
+# Standard library only; reads usb_probe.py's output format (up to 32 B of hex per
+# line, ignoring banners and other non-hex lines).
+import argparse
+from datetime import datetime, timezone
+import json
+import math
 import os
+from pathlib import Path
 import re
 import select
 import sys
 import time
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usb_probe import find_running_ports          # noqa: E402  (同目錄工具)
+from usb_probe import find_running_ports          # noqa: E402  (tool in the same directory)
 from raster import render_frame, FRAME, W, H       # noqa: E402
 
-RECENT = 4096          # 保留最近 N 位元組，供對齊搜尋
-_HEX_RE = re.compile(rb'[0-9a-f]{2,64}')
+RECENT = 4096          # enough for several complete page sequences
+PAGE_STRIDE = W + 1    # measured capture: one page opcode, then 128 pixel bytes
+PAGE_FRAME = (H // 8) * PAGE_STRIDE
+RENDER_INTERVAL = 1 / 30  # coalesce terminal updates without the old 6.7 Hz cap
+_HEX_RE = re.compile(rb'(?:[0-9a-fA-F]{2}){1,32}')
 
-# ── 終端控制序列（只在真 TTY 用）──
+# ── Terminal control sequences (real TTY only) ──
 _ALT_ON, _ALT_OFF = "\x1b[?1049h", "\x1b[?1049l"
 _CUR_OFF, _CUR_ON = "\x1b[?25l", "\x1b[?25h"
 _HOME = "\x1b[H"
 _OLED, _RST = "\x1b[97m", "\x1b[0m"
 
-def densest_frame(buf):
-    """最近緩衝裡非零密度最高的 1024 B 視窗（步進 32 找較佳欄對齊）。"""
-    best_off, best_nz = 0, -1
-    end = max(1, len(buf) - FRAME + 1)
-    for off in range(0, end, 32):
-        nz = sum(1 for x in buf[off:off + FRAME] if x)
-        if nz > best_nz:
-            best_off, best_nz = off, nz
-    return buf[best_off:best_off + FRAME]
+def latest_frame(buf):
+    """Raw diagnostic view; its origin is unknown, but it cannot favor old density."""
+    return bytes(buf[-FRAME:]) if len(buf) >= FRAME else None
+
 
 def page_frame(buf):
-    """實驗性：靠 頁命令(0xB0..0xB7)對齊——命令後取 128 B 當該頁像素。
-    對付「每頁命令位元組插入造成逐頁橫向位移」。像素偶爾撞到 0xBn 會有小雜訊。"""
-    fb = bytearray(FRAME)
-    i, n = 0, len(buf)
-    seen = False
-    while i < n:
-        b = buf[i]
-        if 0xB0 <= b <= 0xB7:
-            seen = True
-            page = b & 0x07
-            j = i + 1
-            while j < n and buf[j] <= 0x1F and (j - i) <= 3:  # 跳過緊接的欄位址命令
-                j += 1
-            seg = buf[j:j + W]
-            base = page * W
-            for k, v in enumerate(seg):
-                if base + k < FRAME:
-                    fb[base + k] = v
-            i = j + len(seg)
-        else:
-            i += 1
-    return bytes(fb) if seen else None
+    """Newest complete B0..B7 sequence with exactly 128 payload bytes per page.
 
-def make_frame(buf, use_page):
-    if use_page:
-        f = page_frame(buf)
-        if f is not None:
-            return f
-    return densest_frame(buf)
+    The observed stream has no column-address bytes between a page marker and
+    its payload. Never skip low-valued pixels. Requiring all eight markers at
+    their expected offsets avoids treating an isolated pixel byte as a command.
+    Display remapping/orientation still needs comparison with the physical panel.
+    """
+    match = find_page_frame(buf)
+    return match[1] if match is not None else None
+
+
+def find_page_frame(buf):
+    """Return the newest complete sequence's offset and framebuffer."""
+    for off in range(len(buf) - PAGE_FRAME, -1, -1):
+        if all(buf[off + page * PAGE_STRIDE] == 0xB0 + page
+               for page in range(H // 8)):
+            return off, b''.join(buf[off + page * PAGE_STRIDE + 1:
+                                off + (page + 1) * PAGE_STRIDE]
+                            for page in range(H // 8))
+    return None
+
+
+def make_frame(buf, use_page=True):
+    return page_frame(buf) if use_page else latest_frame(buf)
+
+
+def feed_hex(line_bytes, acc):
+    """Accept only a whole firmware hex line (1..32 bytes); return bytes added."""
+    line = line_bytes.strip()
+    if not _HEX_RE.fullmatch(line):
+        return 0
+    data = bytes.fromhex(line.decode('ascii'))
+    acc.extend(data)
+    return len(data)
+
+
+class CaptureLog:
+    """Exact serial input plus timestamped decoder decisions; never overwrite."""
+
+    def __init__(self, path=None, source='live'):
+        if path is None:
+            stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+            path = (Path(__file__).resolve().parents[2] / '_output' / 'captures'
+                    / f'mirror-{stamp}-{uuid.uuid4().hex[:6]}.txt')
+        self.path = Path(path)
+        self.events_path = Path(str(self.path) + '.events.jsonl')
+        if self.path.exists() or self.events_path.exists():
+            raise FileExistsError(f'Capture already exists: {self.path} or {self.events_path}')
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.raw = self.path.open('xb')
+        try:
+            self.events = self.events_path.open('x')
+        except OSError:
+            self.raw.close()
+            raise
+        self.start = time.monotonic()
+        self.serial_bytes = 0
+        self.event('capture_start', utc=datetime.now(timezone.utc).isoformat(),
+                   raw_path=str(self.path), source=source,
+                   note='Raw serial input before filtering; bytes never sent by firmware are unavailable.')
+
+    def event(self, kind, **details):
+        record = {'event': kind, 'elapsed_ms': round((time.monotonic() - self.start) * 1000, 3),
+                  **details}
+        self.events.write(json.dumps(record) + '\n')
+        self.events.flush()
+
+    def write(self, chunk):
+        # Save before parsing, including malformed text and partial serial lines.
+        offset = self.serial_bytes
+        self.raw.write(chunk)
+        self.raw.flush()
+        self.serial_bytes += len(chunk)
+        self.event('serial_chunk', serial_offset=offset, length=len(chunk))
+
+    def close(self):
+        try:
+            self.event('capture_end', serial_bytes=self.serial_bytes)
+        finally:
+            self.raw.close()
+            self.events.close()
+
+
+class MirrorDecoder:
+    """Keep complete frames across reads, but never assemble across dump gaps."""
+
+    def __init__(self, use_page=True, diagnostics=None):
+        self.use_page = use_page
+        self.diagnostics = diagnostics
+        self.pending = bytearray()
+        self.covered = bytearray()
+        self.pending_offset = 0
+        self.last_span = None
+        self.frame = None
+        self.revision = 0
+        self.received = 0
+
+    def event(self, kind, **details):
+        if self.diagnostics is not None:
+            self.diagnostics(kind, **details)
+
+    def discard(self, count, reason):
+        """Archive every discarded bus byte not consumed by a selected frame."""
+        start = 0
+        while start < count:
+            if self.covered[start]:
+                start += 1
+                continue
+            end = start + 1
+            while end < count and not self.covered[end]:
+                end += 1
+            self.event('unmatched_bus_bytes', bus_offset=self.pending_offset + start,
+                       length=end - start, hex=self.pending[start:end].hex(), reason=reason)
+            start = end
+        del self.pending[:count]
+        del self.covered[:count]
+        self.pending_offset += count
+
+    def finish(self):
+        self.discard(len(self.pending), 'end-of-input')
+
+    def feed_line(self, line):
+        added = feed_hex(line, self.pending)
+        if not added:
+            # Firmware emits a blank line after each DMA dump. Capture stops
+            # during that dump, so bytes on either side may not be contiguous.
+            # Invalid lines/banners also break continuity; preserve the last
+            # complete frame until a fresh complete sequence arrives.
+            reason = 'dump-boundary' if not line.strip() else 'non-hex-line'
+            self.discard(len(self.pending), reason)
+            self.event(reason, after_bus_offset=self.received, serial_line_hex=line.hex())
+            return
+        self.received += added
+        self.covered.extend(b'\x00' * added)
+        if len(self.pending) > RECENT:
+            self.discard(len(self.pending) - RECENT, 'buffer-limit')
+        match = find_page_frame(self.pending) if self.use_page else None
+        if self.use_page:
+            offset, frame = match if match is not None else (0, None)
+            length = PAGE_FRAME
+        else:
+            frame = latest_frame(self.pending)
+            offset, length = len(self.pending) - FRAME, FRAME
+        if frame is not None:
+            self.covered[offset:offset + length] = b'\x01' * length
+            span = (self.pending_offset + offset, length)
+            if span != self.last_span:
+                self.event('frame_candidate', bus_offset=span[0], length=length,
+                           changed=frame != self.frame, mode=mode_label(self.use_page))
+                self.last_span = span
+        if frame is not None and frame != self.frame:
+            self.frame = frame
+            self.revision += 1
+
+
+def mode_label(use_page):
+    return 'page-sequence B0..B7' if use_page else 'RAW UNALIGNED (latest 1024B)'
+
 
 def box(art, status, color=True):
     label = " DOT-MATRIX EVAL BOARD  128x64  — passive bus mirror "
@@ -88,98 +228,139 @@ def box(art, status, color=True):
     lines.append(status)
     return "\n".join(lines) + "\n"
 
-def feed_hex(line_bytes, acc):
-    """把一行（可能含非 hex）擷出 hex → 累積位元組。"""
-    for m in _HEX_RE.findall(line_bytes):
-        try:
-            acc += bytes.fromhex(m.decode())
-        except ValueError:
-            pass
+def report_capture(capture):
+    print(f'Raw capture: {capture.path}\nDecoder events: {capture.events_path}', file=sys.stderr)
 
-def run_live(dev, use_page, seconds):
+
+def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
     tty = sys.stdout.isatty()
     try:
         fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK | os.O_NOCTTY)
     except OSError as e:
-        print(f"無法開啟 {dev}：{e}")
+        print(f"Cannot open {dev}: {e}")
         return 1
-    acc = bytearray()
+    try:
+        capture = CaptureLog(capture_path)
+    except OSError as error:
+        os.close(fd)
+        print(f'Cannot save capture: {error}')
+        return 1
+    report_capture(capture)
+    decoder = MirrorDecoder(use_page, capture.event)
     linebuf = bytearray()
-    deadline = (time.time() + seconds) if seconds else None
-    last_render, frames = 0.0, 0
+    deadline = (time.monotonic() + seconds) if seconds else None
+    last_render, frames, rendered_revision = 0.0, 0, -1
     if tty:
         sys.stdout.write(_ALT_ON + _CUR_OFF)
         sys.stdout.flush()
     try:
-        while deadline is None or time.time() < deadline:
+        while deadline is None or time.monotonic() < deadline:
             r, _, _ = select.select([fd], [], [], 0.2)
             if r:
                 try:
                     chunk = os.read(fd, 4096)
+                except BlockingIOError:
+                    continue
                 except OSError:
                     break
-                if chunk:
-                    linebuf += chunk
-                    while b"\n" in linebuf:
-                        line, _, linebuf = linebuf.partition(b"\n")
-                        feed_hex(line, acc)
-                    if len(acc) > RECENT:
-                        del acc[:-RECENT]
-            now = time.time()
-            if now - last_render >= 0.15 and len(acc) >= FRAME:
-                frame = make_frame(bytes(acc), use_page)
-                art = render_frame(frame)
+                if not chunk:
+                    break
+                capture.write(chunk)
+                linebuf += chunk
+                while b"\n" in linebuf:
+                    line, _, linebuf = linebuf.partition(b"\n")
+                    decoder.feed_line(line)
+            now = time.monotonic()
+            if (now - last_render >= RENDER_INTERVAL and decoder.frame is not None
+                    and decoder.revision != rendered_revision):
+                art = render_frame(decoder.frame)
                 frames += 1
-                status = (f"frames={frames}  buf={len(acc)}B  "
-                          f"{'page-align' if use_page else 'densest'}  "
-                          f"(切評估板畫面看鏡像跟著變；Ctrl-C 離開)")
+                status = (f"updates={frames}  received={decoder.received}B  "
+                          f"{mode_label(use_page)}  (Ctrl-C to quit)")
                 if tty:
                     sys.stdout.write(_HOME + box(art, status, color=True))
                 else:
                     sys.stdout.write("\n" + box(art, status, color=False))
                 sys.stdout.flush()
+                capture.event('render', revision=decoder.revision, received_bus_bytes=decoder.received)
                 last_render = now
+                rendered_revision = decoder.revision
     except KeyboardInterrupt:
         pass
     finally:
-        os.close(fd)
-        if tty:
-            sys.stdout.write(_CUR_ON + _ALT_OFF)
-            sys.stdout.flush()
+        try:
+            if linebuf:
+                capture.event('partial_serial_line', hex=linebuf.hex())
+            decoder.finish()
+        finally:
+            try:
+                capture.close()
+            finally:
+                os.close(fd)
+                if tty:
+                    sys.stdout.write(_CUR_ON + _ALT_OFF)
+                    sys.stdout.flush()
+                report_capture(capture)
     if frames == 0:
-        print("（沒有畫面資料——評估板開機了嗎？切一下畫面製造匯流排活動。）")
+        print("No complete frame. Switch screens to generate bus activity. "
+              "Page mode requires B0..B7 with 128 bytes per page; "
+              "--raw shows an unaligned diagnostic view.")
+        return 1
     return 0
 
-def run_file(path, use_page):
-    by = bytearray()
-    for ln in open(path):
-        feed_hex(ln.encode(), by)
-    if not by:
-        print("# 檔案裡沒有 hex 資料")
+
+def run_file(path, use_page=True, capture_path=None):
+    capture = None
+    decoder = MirrorDecoder(use_page)
+    try:
+        with open(path, 'rb') as source:
+            capture = CaptureLog(capture_path, source='replay') if capture_path is not None else None
+            decoder = MirrorDecoder(use_page, capture.event if capture is not None else None)
+            for line in source:
+                if capture is not None:
+                    capture.write(line)
+                decoder.feed_line(line)
+    except OSError as error:
+        print(f"Cannot read {path}: {error}")
         return 1
-    frame = make_frame(bytes(by), use_page)
-    print(box(render_frame(frame),
-              f"{len(by)}B  {'page-align' if use_page else 'densest'}  (file replay)",
+    finally:
+        try:
+            decoder.finish()
+        finally:
+            if capture is not None:
+                capture.close()
+                report_capture(capture)
+    if decoder.frame is None:
+        print(f"# No complete frame in {decoder.received} captured bytes. "
+              "Expected B0..B7 with 128 bytes per page; "
+              "--raw shows an unaligned diagnostic view.")
+        return 1
+    print(box(render_frame(decoder.frame),
+              f"{decoder.received}B  {mode_label(use_page)}  (file replay)",
               color=sys.stdout.isatty()))
     return 0
 
+
 def main():
-    args = sys.argv[1:]
-    use_page = "--page" in args
-    seconds = 0.0
-    if "--seconds" in args:
-        try:
-            seconds = float(args[args.index("--seconds") + 1])
-        except (IndexError, ValueError):
-            pass
-    if "--file" in args:
-        return run_file(args[args.index("--file") + 1], use_page)
+    parser = argparse.ArgumentParser(description='Passive SPI screen mirror')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--page', action='store_true', help='page-sequence mode (default)')
+    modes.add_argument('--raw', action='store_true', help='latest 1024 bytes, without alignment')
+    parser.add_argument('--file', help='replay a saved hex capture')
+    parser.add_argument('--capture', help='save exact serial input and .events.jsonl; live default: _output/captures/')
+    parser.add_argument('--seconds', type=float, default=0, help='live duration; 0 means unlimited')
+    args = parser.parse_args()
+    if not math.isfinite(args.seconds) or args.seconds < 0:
+        parser.error('--seconds must be finite and nonnegative')
+    use_page = not args.raw
+    if args.file:
+        return run_file(args.file, use_page, args.capture)
 
     ports = find_running_ports()
     if not ports:
-        print("找不到 RP2040 序列埠。先確認板子在跑 spi_tap（usb_probe.py 回報 RUNNING）。")
+        print("No RP2040 serial port found. Check that the board is running spi_tap (usb_probe.py reports RUNNING).")
         return 1
-    return run_live(ports[0][2], use_page, seconds)
+    return run_live(ports[0][2], use_page, args.seconds, args.capture)
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -6,9 +6,9 @@
 
 一片 Feather RP2040 被動高阻抗搭在點陣顯示**評估板**的「控制器 → OLED」SPI 匯流排上（四條線：DI/CLK/CS/GND），把匯流排位元組串流回主機；主機端 `live_mirror.py` 重建 framebuffer，**即時**把評估板當下顯示的畫面鏡像成第二螢幕（終端裡的 ASCII，概念上也可再推到一塊實體 OLED）。
 
-探針全程**只讀、不驅動任何線**，所以它在評估板毫不知情下複製畫面。這既是「替任何點陣顯示器外掛一個第二螢幕」的小工具，也順帶說明一件事：**可及的明文顯示匯流排，內容就守不住**。
+探針全程**只讀、不驅動任何線**，所以它在評估板毫不知情下複製畫面。這既是「替任何點陣顯示器外掛一個第二螢幕」的小工具。
 
-- 目標是**自有的點陣顯示評估板**；本 repo 不針對任何特定商品，也不含任何內容解讀（OCR／文字還原）邏輯——只做「畫面 → 第二螢幕」的像素鏡像。
+- 目標是**自有的點陣顯示評估板**；本 repo 做「畫面 → 第二螢幕」的像素鏡像。
 - 顯示打包假設一般點陣 OLED 控制器的「欄定址＋每欄 8 垂直像素」佈局。
 
 ## Setup
@@ -25,7 +25,7 @@
 - `poc/rp2040-spi-tap/`：RP2040 被動擷取韌體。
   - `spi_tap.c` / `.pio`：PIO 以 CS 為 frame 邊界、CLK 邊緣取樣 DI，DMA 收進緩衝、USB CDC 以 hex 倒出。
   - `bus_probe.c`：無示波器診斷——PWM 硬體計 CLK 上升緣，用真輸入門檻判斷「這條匯流排讀不讀得到」。
-  - `loopback_test.c`：on-chip 自測（同板自驅自讀），驗證擷取鏈；**絕不可**在接著目標板時燒（它會驅動腳位）。
+  - `loopback_test.c`：on-chip 自測（同板自驅自讀），驗證擷取鏈；不可在接著目標板時燒（它會驅動腳位）。
   - `CMakeLists.txt`、`wiring.html`、`ref/`（Feather 腳位定位圖）。
 - `poc/host/`：主機端工具（純標準庫）。
   - `live_mirror.py`：**即時第二螢幕（主效果）**——串流重建、終端原地重繪成 ASCII 畫面。
@@ -35,10 +35,7 @@
 
 ## Conventions
 
-- 「被動」是鐵律：擷取腳位全程輸入、以 OEOVER/OD 鎖成永不驅動；任何會驅動匯流排的韌體（如 `loopback_test`）不得在接著目標板時燒。
-- 本 repo 只做像素鏡像，**不做** OCR／內容還原。要加功能前先問：這是「畫面 → 第二螢幕」嗎？不是就別加。
-- 只用**自有、無敏感內容**的評估板；擷取資料不離開評估環境。
-- 事實陳述附標記：**[證實]** 有實測／多方一致；**[推測]** 間接推得。圖表用 Mermaid，直接寫在 Markdown 裡。
+- TBD
 
 ## Commands
 
@@ -52,7 +49,6 @@ picotool load -x -f poc/build/spi-tap/spi_tap.uf2
 python3 poc/host/live_mirror.py          # 第二螢幕；--page 改頁命令對齊；--file 重播擷取檔
 ```
 
-- ⚠ **端點防護（Jamf EDR 等）**會擋 picotool 的「軟體進 BOOTSEL」；此時改用實體按鈕進 BOOTSEL 再跑不帶 `-f` 的 `picotool load -x`。無 EDR 機器軟體燒錄即可。
 - ⚠ 近期 macOS 會把 `RPI-RP2` 掛成唯讀，拖放 `.uf2` 失敗，故用 picotool。
 
 ## Work queue
@@ -70,5 +66,3 @@ python3 poc/host/live_mirror.py          # 第二螢幕；--page 改頁命令對
 ## Authorizations（長跑授權）
 
 自動化長跑可不經詢問：編輯 docs／code／tickets；在 `main` 上 commit 並 push；下載公開檔到 scratchpad（唯讀）；建置並燒錄自有 Feather RP2040（可復燒）。
-
-需暫停並列入 stop report：開 PR、任何觸及真實資產的動作、對外發佈、不可逆刪除，以及其他未涵蓋的不可逆或對外動作。
