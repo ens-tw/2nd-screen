@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import live_mirror as mirror
+from spi_stream import compact_packet
 
 
 def encode_frame(frame):
@@ -19,28 +20,14 @@ def encode_frame(frame):
                     for page in range(8))
 
 
-def dump_lines(data):
-    return [data[i:i + 32].hex().encode() + b'\r\n' for i in range(0, len(data), 32)]
-
-
 def ingest(decoder, data):
-    for line in dump_lines(data):
-        decoder.feed_line(line)
+    for i in range(0, len(data), 32):
+        decoder.feed_bus(data[i:i + 32])
 
 
 class MirrorTests(unittest.TestCase):
     def setUp(self):
         self.frame = random.Random(19).randbytes(1024)
-
-    def test_banner_and_malformed_lines_add_no_bytes(self):
-        acc = bytearray()
-        for line in (b'# spi_tap ready (DI=GP10 CLK=GP11 CS=GP12) -- no decode',
-                     b'frames=12 deadbeef', b'abc', b'0x12', b'00' * 33,
-                     b'12 34', b'\xff\x0012', b'', b'\r\n'):
-            self.assertEqual(mirror.feed_hex(line, acc), 0)
-        self.assertEqual(acc, b'')
-        self.assertEqual(mirror.feed_hex(b' 00aABbFF\r\n', acc), 4)
-        self.assertEqual(acc, bytes.fromhex('00aabbff'))
 
     def test_page_payload_zeros_low_values_and_markers_are_preserved(self):
         frame = bytearray(self.frame)
@@ -75,17 +62,16 @@ class MirrorTests(unittest.TestCase):
         ingest(decoder, encode_frame(b'\x00' * 1024)[-16:])
         self.assertEqual(decoder.frame, b'\x00' * 1024)
 
-    def test_gap_or_banner_prevents_assembling_a_spliced_frame(self):
+    def test_gap_prevents_assembling_a_spliced_frame(self):
         wire = encode_frame(self.frame)
-        for separator in (b'\r\n', b'# spi_tap ready DI=GP10\n', b'123\n'):
-            decoder = mirror.MirrorDecoder()
-            ingest(decoder, wire[:-16])
-            decoder.feed_line(separator)
-            ingest(decoder, wire[-16:])
-            self.assertIsNone(decoder.frame)
-            decoder.feed_line(b'\n')
-            ingest(decoder, wire)
-            self.assertEqual(decoder.frame, self.frame)
+        decoder = mirror.MirrorDecoder()
+        ingest(decoder, wire[:-16])
+        decoder.break_stream('test-gap')
+        ingest(decoder, wire[-16:])
+        self.assertIsNone(decoder.frame)
+        decoder.break_stream('test-gap')
+        ingest(decoder, wire)
+        self.assertEqual(decoder.frame, self.frame)
 
     def test_duplicate_frame_does_not_increase_redraw_revision(self):
         decoder = mirror.MirrorDecoder()
@@ -102,21 +88,21 @@ class MirrorTests(unittest.TestCase):
 
     def test_replay_default_and_raw_modes(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'capture.txt'
-            path.write_bytes(b'# ready GP10 GP11 GP12\n' + b''.join(dump_lines(encode_frame(self.frame))) + b'\n')
+            path = Path(directory) / 'capture.bin'
+            path.write_bytes(compact_packet(encode_frame(self.frame), 0, 0))
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 self.assertEqual(mirror.run_file(path), 0)
             self.assertIn('1032B  page-sequence', out.getvalue())
             self.assertIn(mirror.render_frame(self.frame).splitlines()[0], out.getvalue())
-            path.write_bytes(b''.join(dump_lines(self.frame)))
+            path.write_bytes(compact_packet(self.frame, 0, 0))
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(mirror.run_file(path), 1)
                 self.assertEqual(mirror.run_file(path, False), 0)
 
     def test_live_fragmented_serial_reads_and_eof(self):
-        # Deliberately split within a hex byte and between CR/LF. No real USB access.
-        raw = b'# spi_tap ready GP10 GP11 GP12\n' + b''.join(dump_lines(encode_frame(self.frame))) + b'\n'
+        # Deliberately split inside packets. No real USB access.
+        raw = compact_packet(encode_frame(self.frame), 0, 0)
         chunks = [raw[i:i + 17] for i in range(0, len(raw), 17)] + [b'']
         out = io.StringIO()
         with tempfile.TemporaryDirectory() as directory, \
@@ -125,30 +111,28 @@ class MirrorTests(unittest.TestCase):
                 patch.object(mirror.os, 'close') as close, \
                 patch.object(mirror.select, 'select', return_value=([55], [], [])), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            path = Path(directory) / 'live.txt'
+            path = Path(directory) / 'live.bin'
             self.assertEqual(mirror.run_live('/fake/serial', capture_path=path), 0)
             self.assertEqual(path.read_bytes(), raw)
         close.assert_called_once_with(55)
         self.assertIn('received=1032B', out.getvalue())
-        self.assertIn('compression saved% min/max/avg=100.0/--/--', out.getvalue())
+        self.assertIn('compression saved% min/max/avg=0.0/0.0/0.0', out.getvalue())
         self.assertIn(mirror.render_frame(self.frame).splitlines()[0], out.getvalue())
 
     def test_tty_status_refreshes_for_unchanged_pixels_without_frame_redraw(self):
-        from spi_stream import HEADER, MAGIC, DATA, RLE, rle_encode
+        from spi_stream import STATUS, STATUS_HEADER, STATUS_MAGIC, compact_packet
         class Terminal(io.StringIO):
             def isatty(self):
                 return True
         bus = encode_frame(b'\x00' * 1024)
-        chunks = []
-        seq, offset = 0, 0
+        body = STATUS_HEADER.pack(STATUS_MAGIC, STATUS, 0, 0, 0, 12345, 0, 1, 0, 0)
+        chunks = [body + struct.pack('<I', zlib.crc32(body))]
+        seq, offset = 1, 0
         for _ in range(2):
             wire = bytearray()
             for i in range(0, len(bus), 256):
                 part = bus[i:i + 256]
-                encoded = struct.pack('<H', len(part)) + rle_encode(part)
-                body = HEADER.pack(MAGIC, DATA, RLE, len(encoded), seq, 12345, offset, 1, 0, 0)
-                body += encoded
-                wire.extend(body + struct.pack('<I', zlib.crc32(body)))
+                wire.extend(compact_packet(part, seq, offset))
                 seq += 1
                 offset += len(part)
             chunks.append(bytes(wire))
@@ -172,18 +156,92 @@ class MirrorTests(unittest.TestCase):
         self.assertEqual(stats['data_packets'], 10)
         self.assertGreater(stats['avg_saved_percent'], 0)
 
+    def test_opening_the_port_keeps_input_already_received(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(mirror.os, 'open', return_value=55), \
+                patch.object(mirror.os, 'isatty', return_value=True), \
+                patch.object(mirror.os, 'read', side_effect=[b'']), \
+                patch.object(mirror.os, 'close'), \
+                patch.object(mirror.select, 'select', return_value=([55], [], [])), \
+                patch.object(mirror.tty, 'setraw') as setraw, \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            mirror.run_live('/fake/serial', capture_path=Path(directory) / 'live.bin')
+        setraw.assert_called_once_with(55, mirror.termios.TCSANOW)
+
+    def test_rate_meter_uses_a_sliding_window_and_decays_when_idle(self):
+        meter = mirror.RateMeter(100.0)
+        meter.update(100.5, 1000, 4000)
+        self.assertEqual((meter.wire_Bps, meter.bus_Bps), (500, 2000))
+        meter.update(101.5, 3000, 12000)
+        self.assertEqual((meter.wire_Bps, meter.bus_Bps), (1500, 6000))
+        meter.update(102.4, 3000, 12000)
+        self.assertEqual(meter.wire_Bps, 1500)
+        meter.update(102.6, 3000, 12000)
+        self.assertEqual(meter.wire_Bps, 1000)
+        meter.update(104.0, 3000, 12000)
+        self.assertEqual((meter.wire_Bps, meter.bus_Bps), (0, 0))
+        summary = meter.summary()
+        self.assertEqual((summary['peak_wire_Bps'], summary['peak_bus_Bps']), (1500, 6000))
+        self.assertEqual(summary['avg_wire_Bps'], 750)
+        self.assertEqual(summary['avg_bus_Bps'], 3000)
+
+    def test_rate_meter_first_read_does_not_spike_and_zero_elapsed_has_no_average(self):
+        meter = mirror.RateMeter(100.0)
+        self.assertIsNone(meter.summary()['avg_wire_Bps'])
+        meter.update(100.001, 36, 0)
+        self.assertEqual(meter.wire_Bps, 18)
+
+    def test_rate_label_reports_bits_and_bytes(self):
+        meter = mirror.RateMeter(0.0)
+        meter.update(1.0, 2560, 20000)
+        self.assertEqual(mirror.rate_label(meter),
+                         'rate(2s) wire=10.2 kbit/s (1.28 kB/s)  bus=80.0 kbit/s')
+
+    def test_waiting_screen_refreshes_rate_and_summary_counts_every_serial_byte(self):
+        from spi_stream import STATUS, STATUS_HEADER, STATUS_MAGIC
+        class Terminal(io.StringIO):
+            def isatty(self):
+                return True
+        body = STATUS_HEADER.pack(STATUS_MAGIC, STATUS, 0, 0, 0, 12345, 0, 1, 0, 0)
+        heartbeat = body + struct.pack('<I', zlib.crc32(body))
+        out = Terminal()
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(mirror.os, 'open', return_value=55), \
+                patch.object(mirror.os, 'read', side_effect=[heartbeat] * 4 + [b'']), \
+                patch.object(mirror.os, 'close'), \
+                patch.object(mirror.select, 'select', return_value=([55], [], [])), \
+                patch.object(mirror.time, 'monotonic', side_effect=itertools.count(1, 0.3).__next__), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            path = Path(directory) / 'live.bin'
+            self.assertEqual(mirror.run_live('/fake/serial', capture_path=path), 1)
+            events = [json.loads(line) for line in Path(str(path) + '.events.jsonl').read_text().splitlines()]
+        self.assertIn('rate(2s) wire=0.0 kbit/s (0.00 kB/s)  bus=0.0 kbit/s', out.getvalue())
+        self.assertIn('wire=0.3 kbit/s (0.04 kB/s)', out.getvalue())
+        stats = next(e for e in events if e['event'] == 'rate_summary')
+        self.assertEqual(stats['wire_bytes'], 4 * len(heartbeat))
+        self.assertEqual(stats['bus_bytes'], 0)
+
+    def test_file_replay_has_no_rate_line(self):
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(out):
+            path = Path(directory) / 'replay.bin'
+            path.write_bytes(compact_packet(encode_frame(self.frame), 0, 0))
+            self.assertEqual(mirror.run_file(str(path)), 0)
+        self.assertIn('compression saved%', out.getvalue())
+        self.assertNotIn('rate(', out.getvalue())
+
     def test_extra_bytes_are_saved_with_original_bus_offsets(self):
         events = []
         decoder = mirror.MirrorDecoder(diagnostics=lambda kind, **data: events.append((kind, data)))
         prefix = b'\xa6\xc0\xa0'
         partial = b'\xb7' + b'\0' * 40
         ingest(decoder, prefix + encode_frame(self.frame) + partial)
-        decoder.feed_line(b'\n')
+        decoder.break_stream('test-gap')
         decoder.finish()
         extras = [event for kind, event in events if kind == 'unmatched_bus_bytes']
         self.assertEqual([(event['bus_offset'], bytes.fromhex(event['hex'])) for event in extras],
                          [(0, prefix), (len(prefix) + 1032, partial)])
-        self.assertTrue(all(event['reason'] == 'dump-boundary' for event in extras))
+        self.assertTrue(all(event['reason'] == 'test-gap' for event in extras))
         frames = [event for kind, event in events if kind == 'frame_candidate']
         self.assertEqual(len(frames), 1)
         self.assertEqual(frames[0]['bus_offset'], len(prefix))
@@ -206,11 +264,11 @@ class MirrorTests(unittest.TestCase):
         self.assertEqual(offset, len(data))
 
     def test_replay_log_is_lossless_even_for_ignored_and_partial_input(self):
-        raw = (b'# banner GP10 GP11 GP12\r\n' + b''.join(dump_lines(encode_frame(self.frame)))
-               + b'\r\ninvalid: deadbeef\r\n' + b''.join(dump_lines(b'\xb7\0\0')) + b'a')
+        raw = (b'junk' + compact_packet(encode_frame(self.frame), 0, 0)
+               + compact_packet(b'\xb7\0\0', 1, 1032) + b'S3\x00')
         with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / 'source.txt'
-            saved = Path(directory) / 'saved.txt'
+            source = Path(directory) / 'source.bin'
+            saved = Path(directory) / 'saved.bin'
             source.write_bytes(raw)
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(mirror.run_file(source, capture_path=saved), 0)
@@ -218,24 +276,24 @@ class MirrorTests(unittest.TestCase):
             events = [json.loads(line) for line in Path(str(saved) + '.events.jsonl').read_text().splitlines()]
         self.assertEqual(events[0]['source'], 'replay')
         self.assertEqual(events[-1]['serial_bytes'], len(raw))
-        self.assertTrue(any(event['event'] == 'non-hex-line' for event in events))
+        self.assertTrue(any(event['event'] == 'transport_noise' for event in events))
         self.assertTrue(any(event['event'] == 'unmatched_bus_bytes' for event in events))
         times = [event['elapsed_ms'] for event in events]
         self.assertEqual(times, sorted(times))
 
-    def test_live_partial_line_saved_even_when_no_frame_decodes(self):
-        raw = b'# banner\r\n00ff\r\n\r\n123'
+    def test_live_partial_packet_saved_even_when_no_frame_decodes(self):
+        raw = compact_packet(b'\x00\xff', 0, 0) + b'S3\x00'
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(mirror.os, 'open', return_value=55), \
                 patch.object(mirror.os, 'read', side_effect=[raw, b'']), \
                 patch.object(mirror.os, 'close'), \
                 patch.object(mirror.select, 'select', return_value=([55], [], [])), \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            saved = Path(directory) / 'partial.txt'
+            saved = Path(directory) / 'partial.bin'
             self.assertEqual(mirror.run_live('/fake/serial', capture_path=saved), 1)
             self.assertEqual(saved.read_bytes(), raw)
             events = [json.loads(line) for line in Path(str(saved) + '.events.jsonl').read_text().splitlines()]
-        self.assertTrue(any(event['event'] == 'partial_serial_line' and event['hex'] == b'123'.hex()
+        self.assertTrue(any(event['event'] == 'partial_transport_packet' and event['hex'] == b'S3\x00'.hex()
                             for event in events))
 
     def test_capture_never_overwrites_existing_files(self):

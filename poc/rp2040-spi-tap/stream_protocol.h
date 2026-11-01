@@ -4,13 +4,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define TAP_HEADER_SIZE 32u
-#define TAP_MAX_PAYLOAD 256u
-#define TAP_PACKET_SIZE (TAP_HEADER_SIZE + TAP_MAX_PAYLOAD + 4u)
-#define TAP_DATA 1u
+#define TAP_STATUS_HEADER_SIZE 32u
+#define TAP_STATUS_PACKET_SIZE (TAP_STATUS_HEADER_SIZE + 4u)
 #define TAP_STATUS 2u
 #define TAP_SESSION_START 1u
 #define TAP_RLE 2u
+#define TAP_COMPACT_HEADER_SIZE 8u
+#define TAP_COMPACT_MAX_PAYLOAD 2048u
+#define TAP_COMPACT_PACKET_SIZE (TAP_COMPACT_HEADER_SIZE + TAP_COMPACT_MAX_PAYLOAD + 4u)
 
 static inline void tap_put_u32(uint8_t *out, uint32_t value) {
     for (unsigned i = 0; i < 4; ++i) out[i] = (uint8_t)(value >> (8u * i));
@@ -26,24 +27,20 @@ static inline uint32_t tap_crc32(const uint8_t *data, size_t length) {
     return ~crc;
 }
 
-// Header: magic, type, flags, uint16 length, then six little-endian uint32s.
+// Status: "STP2", type, flags, uint16 zero length, six little-endian uint32s, CRC32.
 // Offset counts captured bytes, including known ring drops. PIO missed bits
 // cannot be counted: stall_events reports sticky RXSTALL observations instead.
-static inline size_t tap_packet(uint8_t *out, uint8_t type, uint8_t flags,
-                                const uint8_t *payload, uint16_t length,
-                                uint32_t sequence, uint32_t timestamp_us,
-                                uint32_t offset, uint32_t loss_epoch,
-                                uint32_t dropped_total, uint32_t stall_events) {
-    if (length > TAP_MAX_PAYLOAD) return 0;
+static inline size_t tap_status_packet(uint8_t *out, uint8_t flags,
+                                       uint32_t sequence, uint32_t timestamp_us,
+                                       uint32_t offset, uint32_t loss_epoch,
+                                       uint32_t dropped_total, uint32_t stall_events) {
     out[0] = 'S'; out[1] = 'T'; out[2] = 'P'; out[3] = '2';
-    out[4] = type; out[5] = flags;
-    out[6] = (uint8_t)length; out[7] = (uint8_t)(length >> 8);
+    out[4] = TAP_STATUS; out[5] = flags;
+    out[6] = 0; out[7] = 0;
     const uint32_t fields[] = {sequence, timestamp_us, offset, loss_epoch, dropped_total, stall_events};
     for (unsigned i = 0; i < 6; ++i) tap_put_u32(out + 8u + 4u * i, fields[i]);
-    for (unsigned i = 0; i < length; ++i) out[TAP_HEADER_SIZE + i] = payload[i];
-    size_t body = TAP_HEADER_SIZE + length;
-    tap_put_u32(out + body, tap_crc32(out, body));
-    return body + 4u;
+    tap_put_u32(out + TAP_STATUS_HEADER_SIZE, tap_crc32(out, TAP_STATUS_HEADER_SIZE));
+    return TAP_STATUS_PACKET_SIZE;
 }
 
 // Byte-run coding: 0..127 = tag+1 literal bytes; 128..255 = repeat the
@@ -76,26 +73,35 @@ static inline size_t tap_rle_encode(uint8_t *out, size_t capacity,
     return used;
 }
 
-// Encode directly into the existing packet buffer, with no extra scratch RAM.
-// RLE payload = uint16 original length + runs; use raw if that is not smaller.
-// Header length counts wire bytes. Offset always counts ORIGINAL bus bytes.
-static inline size_t tap_packet_auto(uint8_t *out, uint8_t type, uint8_t flags,
-                                     const uint8_t *payload, uint16_t length,
-                                     uint32_t sequence, uint32_t timestamp_us,
-                                     uint32_t offset, uint32_t epoch,
-                                     uint32_t dropped, uint32_t stalls) {
-    if (length > TAP_MAX_PAYLOAD) return 0;
-    if (type == TAP_DATA && length > 4) {
-        uint8_t *encoded = out + TAP_HEADER_SIZE;
-        size_t size = tap_rle_encode(encoded + 2, TAP_MAX_PAYLOAD - 2, payload, length);
-        if (size && size + 2 < length) {
-            encoded[0] = (uint8_t)length;
-            encoded[1] = (uint8_t)(length >> 8);
-            return tap_packet(out, type, flags | TAP_RLE, encoded, (uint16_t)(size + 2),
-                              sequence, timestamp_us, offset, epoch, dropped, stalls);
-        }
+// Compact data packet: "S3", flags, sequence low 8 bits, uint16 wire length,
+// offset low 16 bits, payload, CRC32. Epoch and counters are not repeated: any
+// change to them is announced by a status packet before the next data.
+// RLE payload = uint16 original length + runs; raw if that is not smaller.
+// Wire length counts wire bytes. Offset always counts ORIGINAL bus bytes.
+// Each packet decodes on its own.
+static inline size_t tap_compact_packet(uint8_t *out, const uint8_t *payload, uint16_t length,
+                                        uint32_t sequence, uint32_t offset) {
+    if (!length || length > TAP_COMPACT_MAX_PAYLOAD) return 0;
+    uint8_t flags = 0;
+    uint8_t *wire = out + TAP_COMPACT_HEADER_SIZE;
+    uint16_t wire_length = length;
+    size_t size = length > 4
+        ? tap_rle_encode(wire + 2, TAP_COMPACT_MAX_PAYLOAD - 2, payload, length) : 0;
+    if (size && size + 2 < length) {
+        flags = TAP_RLE;
+        wire[0] = (uint8_t)length;
+        wire[1] = (uint8_t)(length >> 8);
+        wire_length = (uint16_t)(size + 2);
+    } else {
+        for (unsigned i = 0; i < length; ++i) wire[i] = payload[i];
     }
-    return tap_packet(out, type, flags, payload, length,
-                      sequence, timestamp_us, offset, epoch, dropped, stalls);
+    out[0] = 'S'; out[1] = '3';
+    out[2] = flags;
+    out[3] = (uint8_t)sequence;
+    out[4] = (uint8_t)wire_length; out[5] = (uint8_t)(wire_length >> 8);
+    out[6] = (uint8_t)offset; out[7] = (uint8_t)(offset >> 8);
+    size_t body = TAP_COMPACT_HEADER_SIZE + wire_length;
+    tap_put_u32(out + body, tap_crc32(out, body));
+    return body + 4u;
 }
 #endif

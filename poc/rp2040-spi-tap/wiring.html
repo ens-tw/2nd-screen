@@ -242,7 +242,7 @@
           <tr><td class="pin"><span class="dot" style="background:var(--w-cs)"></span>CS</td><td class="pin">GP12</td><td class="pin">D12</td><td>晶片選擇（frame 邊界）</td></tr>
           <tr><td class="pin"><span class="dot" style="background:var(--w-gnd)"></span>GND</td><td class="pin">GND</td><td class="pin">GND</td><td>共地（必接）</td></tr>
           <tr class="nc"><td class="pin">+5V vUSB</td><td colspan="2"><span class="tag-nc">不接 NC</span></td><td>探針由自身 USB 供電</td></tr>
-          <tr class="nc"><td class="pin">ON</td><td colspan="2"><span class="tag-nc">不接 NC</span></td><td>用途未確認；不可猜作 D/C 或驅動</td></tr>
+          <tr class="nc"><td class="pin">ON</td><td colspan="2"><span class="tag-nc">不接 NC</span></td><td>用途未確認，不接</td></tr>
         </tbody>
       </table>
     </div>
@@ -275,8 +275,8 @@
       <div class="call ok">
         <span class="ic">✓</span>
         <div>
-          <h3>四線擷取不代表已確認 D/C framing</h3>
-          <p><strong>[證實]</strong> 現有 <code>CS/CLK/DI/GND</code> 可被動擷取並重建像素；<code>D1</code> 為目前使用的資料接點。<strong>[待驗證]</strong> 命令／資料如何區分、是否有未引出的 D/C，以及是否為 9-bit SPI，均尚未確認。先前「D/C 內嵌」的說法證據不足；不要把 <code>ON</code> 接成 D/C，也不要沿用這份被動接線直接回寫。</p>
+          <h3>四線擷取不含 D/C</h3>
+          <p><strong>[證實]</strong> 現有 <code>CS/CLK/DI/GND</code> 可被動擷取並重建像素；<code>D1</code> 為目前使用的資料接點。<strong>[待驗證]</strong> 命令／資料如何區分尚未確認，所以重建靠完整八頁序列定位。<code>ON</code> 用途未確認，不要接。</p>
         </div>
       </div>
       <div class="call warn">
@@ -306,7 +306,7 @@
       <li>出現穩定亂碼 → SPI 極性可能不同，改 <code>spi_tap.pio</code> 的 <code>wait</code> 邊緣（預設 mode 0）。</li>
       <li>腳位＝ <code>D10/D11/D12</code>（＝GP10/11/12）：純數位、無上拉，適合被動搭線。⚠ Feather 的 Dn 絲印 ≠ GPIO 編號，且 <code>GP4</code> 未接出（USBBOOT）、<code>GP2/GP3</code> 是 I2C（SDA/SCL），故都不用。依 Adafruit 原理圖。</li>
       <li>想換腳位 → 改 <code>spi_tap.c</code> 的 <code>PIN_DI/PIN_CLK/PIN_CS</code>，但 DI 與 CLK 必須相鄰、且要選 Feather 有接出的腳。</li>
-      <li>要看畫面 → 跑 <code>python3 poc/host/live_mirror.py</code> 即時鏡像成第二螢幕；或存檔後 <code>python3 poc/host/raster.py &lt;檔&gt;</code> 還原單張。</li>
+      <li>要看畫面 → 跑 <code>python3 poc/host/live_mirror.py</code> 即時鏡像成第二螢幕。</li>
     </ul>
   </section>
 

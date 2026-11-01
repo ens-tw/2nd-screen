@@ -135,11 +135,11 @@ def read_port(dev, seconds, binary=False):
             print(data[i:i + 32].hex(), flush=True)
 
     def show_gap(reason):
-        print(f'\n# STP2 continuity reset: {reason}', flush=True)
+        print(f'\n# stream continuity reset: {reason}', flush=True)
 
     def show_event(kind, **fields):
         if kind == 'stream_packet' and fields['packet_type'] == STATUS:
-            print(f"# STP2 seq={fields['sequence']} offset={fields['device_offset']} "
+            print(f"# status seq={fields['sequence']} offset={fields['device_offset']} "
                   f"epoch={fields['loss_epoch']} dropped={fields['dropped_total']} "
                   f"stalls={fields['stall_events']}", flush=True)
 
@@ -199,7 +199,7 @@ def main():
         if do_read:
             read_port(ports[0][2], seconds, binary='Stream v2' in ports[0][0])
         else:
-            print("  用 `--read [秒數]` 檢視輸出（新版顯示 STP2 status／payload hex；原始存檔用 live_mirror.py）。")
+            print("  用 `--read [秒數]` 檢視輸出（顯示 status／payload hex；原始存檔用 live_mirror.py）。")
         return 0
 
     print("狀態：ABSENT — USB 上找不到 RP2040。")

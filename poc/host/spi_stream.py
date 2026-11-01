@@ -1,15 +1,20 @@
-"""STP2 binary transport: CRC-checked packets and explicit continuity tracking.
+"""Binary transport: CRC-checked packets and explicit continuity tracking.
 
-USB packet/read boundaries have no display meaning. Only a device loss epoch,
-sequence/offset discontinuity, restart, or transport corruption breaks assembly.
+Data travels in compact packets, normally one per bus burst. Full device state
+travels in status packets. USB packet/read boundaries have no display meaning.
+Only a device loss epoch, sequence/offset discontinuity, restart, or transport
+corruption breaks assembly.
 """
 import struct
 import zlib
 
-MAGIC = b'STP2'
-HEADER = struct.Struct('<4sBBHIIIIII')
-MAX_PAYLOAD = 256
-MIN_STATS_PAYLOAD = 128
+STATUS_MAGIC = b'STP2'
+STATUS_HEADER = struct.Struct('<4sBBHIIIIII')
+COMPACT_MAGIC = b'S3'
+# Magic, flags, sequence low 8 bits, wire length, offset low 16 bits.
+COMPACT_HEADER = struct.Struct('<2sBBHH')
+COMPACT_OVERHEAD = COMPACT_HEADER.size + 4
+COMPACT_MAX_PAYLOAD = 2048
 DATA, STATUS, SESSION_START = 1, 2, 1
 RLE = 2
 MASK32 = 0xffffffff
@@ -38,12 +43,22 @@ def rle_encode(data):
     return bytes(out)
 
 
+def compact_packet(payload, sequence, offset):
+    """Reference encoder for tap_compact_packet: RLE when smaller, otherwise raw."""
+    encoded = struct.pack('<H', len(payload)) + rle_encode(payload)
+    use_rle = len(payload) > 4 and len(encoded) < len(payload)
+    wire = encoded if use_rle else payload
+    body = COMPACT_HEADER.pack(COMPACT_MAGIC, RLE if use_rle else 0, sequence & 0xff,
+                               len(wire), offset & 0xffff) + wire
+    return body + struct.pack('<I', zlib.crc32(body))
+
+
 def rle_decode(payload):
-    """Decode one RLE payload, bounded by the original 256-byte packet limit."""
+    """Decode one RLE payload, bounded by the packet format's original-length limit."""
     if len(payload) < 4:
         raise ValueError('RLE payload too short')
     expected = int.from_bytes(payload[:2], 'little')
-    if not 1 <= expected <= MAX_PAYLOAD:
+    if not 1 <= expected <= COMPACT_MAX_PAYLOAD:
         raise ValueError('Invalid RLE original length')
     out = bytearray()
     i = 2
@@ -71,9 +86,7 @@ def rle_decode(payload):
 class CompressionStats:
     """Savings across valid data packets, including header and CRC overhead.
 
-    Min/max are per packet and skip payloads under MIN_STATS_PAYLOAD, whose fate
-    is set by flush timing and RLE framing rather than by the frame's content.
-    Average covers every data packet, weighted by original packet byte count.
+    Min/max are per packet; average is weighted by original packet byte count.
     Ignore status heartbeats so idle time does not dilute the compression ratio.
     """
     def __init__(self):
@@ -84,15 +97,14 @@ class CompressionStats:
         self.maximum = None
 
     def observe(self, original_length, wire_length):
-        original = HEADER.size + original_length + 4
-        wire = HEADER.size + wire_length + 4
+        original = COMPACT_OVERHEAD + original_length
+        wire = COMPACT_OVERHEAD + wire_length
         savings = 100 * (1 - wire / original)
         self.packets += 1
         self.original_bytes += original
         self.wire_bytes += wire
-        if original_length >= MIN_STATS_PAYLOAD:
-            self.minimum = savings if self.minimum is None else min(self.minimum, savings)
-            self.maximum = savings if self.maximum is None else max(self.maximum, savings)
+        self.minimum = savings if self.minimum is None else min(self.minimum, savings)
+        self.maximum = savings if self.maximum is None else max(self.maximum, savings)
 
     def summary(self):
         return dict(data_packets=self.packets, original_packet_bytes=self.original_bytes,
@@ -117,12 +129,26 @@ class StreamParser:
         if self.diagnostics is not None:
             self.diagnostics(kind, **details)
 
+    def next_magic(self):
+        starts = (self.pending.find(STATUS_MAGIC), self.pending.find(COMPACT_MAGIC))
+        return min((start for start in starts if start >= 0), default=-1)
+
+    def widen_compact(self, sequence, offset):
+        """Rebuild full counters from their low bits and the last packet's state."""
+        if self.previous is None:
+            return sequence, offset, 0, 0, 0
+        last = self.previous
+        expected = (last['sequence'] + 1) & MASK32
+        sequence = (expected + ((sequence - expected) & 0xff)) & MASK32
+        offset = (self.expected_offset + ((offset - self.expected_offset) & 0xffff)) & MASK32
+        return sequence, offset, last['loss_epoch'], last['dropped_total'], last['stall_events']
+
     def feed(self, chunk):
         self.pending.extend(chunk)
         while True:
-            start = self.pending.find(MAGIC)
+            start = self.next_magic()
             if start < 0:
-                count = max(0, len(self.pending) - len(MAGIC) + 1)
+                count = max(0, len(self.pending) - len(STATUS_MAGIC) + 1)
                 if count:
                     self.event('transport_noise', hex=self.pending[:count].hex())
                     del self.pending[:count]
@@ -132,27 +158,37 @@ class StreamParser:
                 self.event('transport_noise', hex=self.pending[:start].hex())
                 del self.pending[:start]
                 self.resync = True
-            if len(self.pending) < HEADER.size:
+            compact = self.pending.startswith(COMPACT_MAGIC)
+            header_size = COMPACT_HEADER.size if compact else STATUS_HEADER.size
+            if len(self.pending) < header_size:
                 return
-            magic, kind, flags, length, seq, stamp, offset, epoch, dropped, stalls = HEADER.unpack_from(self.pending)
-            if (kind not in (DATA, STATUS) or flags & ~(SESSION_START | RLE) or length > MAX_PAYLOAD
-                    or (kind == STATUS and (length or flags & RLE)) or (kind == DATA and not length)):
-                self.event('transport_bad_header', hex=self.pending[:HEADER.size].hex())
+            if compact:
+                _, flags, seq, length, offset = COMPACT_HEADER.unpack_from(self.pending)
+                kind, stamp = DATA, None
+                invalid = flags & ~RLE or not 1 <= length <= COMPACT_MAX_PAYLOAD
+            else:
+                magic, kind, flags, length, seq, stamp, offset, epoch, dropped, stalls = \
+                    STATUS_HEADER.unpack_from(self.pending)
+                invalid = kind != STATUS or flags & ~SESSION_START or length
+            if invalid:
+                self.event('transport_bad_header', hex=self.pending[:header_size].hex())
                 del self.pending[:1]
                 self.resync = True
                 continue
-            total = HEADER.size + length + 4
+            total = header_size + length + 4
             if len(self.pending) < total:
                 return
-            body = self.pending[:HEADER.size + length]
-            crc = struct.unpack_from('<I', self.pending, HEADER.size + length)[0]
+            body = self.pending[:header_size + length]
+            crc = struct.unpack_from('<I', self.pending, header_size + length)[0]
             if zlib.crc32(body) != crc:
                 self.event('transport_bad_crc', sequence=seq, hex=self.pending[:total].hex())
                 del self.pending[:1]
                 self.resync = True
                 continue
-            payload = bytes(self.pending[HEADER.size:HEADER.size + length])
+            payload = bytes(self.pending[header_size:header_size + length])
             del self.pending[:total]
+            if compact:
+                seq, offset, epoch, dropped, stalls = self.widen_compact(seq, offset)
             if flags & RLE:
                 try:
                     payload = rle_decode(payload)
@@ -166,7 +202,7 @@ class StreamParser:
             reasons = []
             if self.resync:
                 reasons.append('transport-resync')
-            if flags & SESSION_START:
+            if not compact and flags & SESSION_START:
                 reasons.append('session-start')
             if self.previous is not None:
                 if seq != (self.previous['sequence'] + 1) & MASK32:

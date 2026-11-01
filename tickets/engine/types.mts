@@ -137,7 +137,7 @@ export type Caps = {
  *  that reports members is worked member by member (references/extensions.md). */
 export type Met = { met: boolean; why?: string; members?: Member[] };
 
-/** One part of a done condition — an API in a datastore, a file in a list — as an extension done kind
+/** One part of a done condition — an API in a ledger, a file in a list — as an extension done kind
  *  reports it. An unmet member says what holds it in the vocabulary a ticket uses, so `next` can offer
  *  the one that is workable now and the view can say what holds the rest. The same id reported by two
  *  tickets is the same part: the more specific ticket (fewer members) covers it, and the other ticket's

@@ -17,14 +17,16 @@
 #define RING_BITS 15u
 #define RING_SIZE (1u << RING_BITS)
 #define RING_MASK (RING_SIZE - 1u)
-#define FLUSH_US 1000u
 #define HEARTBEAT_US 250000u
-
-#ifndef TAP_ENABLE_RLE
-#define TAP_ENABLE_RLE 0
-#endif
+// Send once per bus burst. A frame takes ~5 ms and frames arrive ~100 ms apart,
+// so idle detection ends a burst and the age limit bounds latency on a slow trickle.
+#define FRAME_IDLE_US 2000u
+#define FRAME_MAX_AGE_US 20000u
+#define CHUNK_MAX TAP_COMPACT_MAX_PAYLOAD
 
 static uint8_t ring[RING_SIZE] __attribute__((aligned(RING_SIZE)));
+// Static because these buffers would not fit the 2 KB default stack.
+static uint8_t packet[TAP_COMPACT_PACKET_SIZE], payload[CHUNK_MAX];
 static const uint32_t reload_count = RING_SIZE;
 static volatile uint32_t completed_rings;
 static int data_dma, reload_dma;
@@ -116,8 +118,8 @@ int main(void) {
     uint32_t head = 0, tail = 0, dropped = 0, stalls = 0, epoch = 0, sequence = 0;
     uint32_t last_send = time_us_32();
     bool was_connected = false, session_start = true;
-    uint8_t packet[TAP_PACKET_SIZE], payload[TAP_MAX_PAYLOAD];
     size_t tx_length = 0, tx_sent = 0;
+    uint32_t seen_head = 0, last_byte_us = last_send, oldest_us = last_send, reported_epoch = 0;
 
     for (;;) {
         tud_task();
@@ -148,12 +150,17 @@ int main(void) {
             last_send = time_us_32() - HEARTBEAT_US;
         }
         uint32_t available = head - tail;
-        if (available > RING_SIZE - TAP_MAX_PAYLOAD) {
+        if (available > RING_SIZE - CHUNK_MAX) {
             dropped += available;
             tail = head;
             epoch++;
             available = 0;
         }
+        uint32_t now = time_us_32();
+        // Tracked while a packet is still draining, so its time counts toward idle.
+        if (!available) last_byte_us = oldest_us = now;
+        else if (head != seen_head) last_byte_us = now;
+        seen_head = head;
 
         if (tx_sent < tx_length) {
             uint32_t capacity = tud_cdc_write_available();
@@ -163,26 +170,26 @@ int main(void) {
             tud_cdc_write_flush();
             continue;
         }
-        uint32_t now = time_us_32();
-        if (session_start || available >= TAP_MAX_PAYLOAD ||
-            (available && (uint32_t)(now - last_send) >= FLUSH_US) ||
-            (uint32_t)(now - last_send) >= HEARTBEAT_US) {
-            uint16_t count = session_start ? 0 : (available > TAP_MAX_PAYLOAD ? TAP_MAX_PAYLOAD : available);
-            uint32_t offset = tail;
+        if (session_start || epoch != reported_epoch ||
+            (!available && (uint32_t)(now - last_send) >= HEARTBEAT_US)) {
+            tx_length = tap_status_packet(packet, session_start ? TAP_SESSION_START : 0,
+                                          sequence++, now, tail, epoch, dropped, stalls);
+            tx_sent = 0;
+            reported_epoch = epoch;
+            session_start = false;
+            last_send = now;
+        } else if (available >= CHUNK_MAX ||
+                   (available && ((uint32_t)(now - last_byte_us) >= FRAME_IDLE_US ||
+                                  (uint32_t)(now - oldest_us) >= FRAME_MAX_AGE_US))) {
+            uint16_t count = available > CHUNK_MAX ? CHUNK_MAX : (uint16_t)available;
             for (unsigned i = 0; i < count; ++i) payload[i] = ring[(tail + i) & RING_MASK];
             // DMA keeps running during the copy. Reject a copy overtaken by DMA.
             head = producer_position(head);
-            if (head - tail > RING_SIZE - TAP_MAX_PAYLOAD) continue;
-#if TAP_ENABLE_RLE
-            tx_length = tap_packet_auto(packet, count ? TAP_DATA : TAP_STATUS,
-#else
-            tx_length = tap_packet(packet, count ? TAP_DATA : TAP_STATUS,
-#endif
-                                   session_start ? TAP_SESSION_START : 0,
-                                   payload, count, sequence++, now, offset, epoch, dropped, stalls);
+            if (head - tail > RING_SIZE - CHUNK_MAX) continue;
+            tx_length = tap_compact_packet(packet, payload, count, sequence++, tail);
             tx_sent = 0;
             tail += count;
-            session_start = false;
+            oldest_us = now;
             last_send = now;
         }
     }

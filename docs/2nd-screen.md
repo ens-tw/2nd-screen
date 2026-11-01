@@ -2,17 +2,17 @@
 
 一片 Feather RP2040 被動高阻抗搭在點陣顯示**評估板**的「控制器 → OLED」SPI 匯流排上（四條線：DI/CLK/CS/GND），把匯流排位元組串流回主機；主機端把它重建成 framebuffer，即時鏡像成評估板的**第二螢幕**。
 
-現有探針全程**只讀、不驅動任何線**。這既是「替點陣顯示器外掛第二螢幕」的小工具。主動改寫第一螢幕另列為評估板實驗方向，硬體前提見下節。
+現有探針全程**只讀、不驅動任何線**。這是「替點陣顯示器外掛第二螢幕」的小工具。
 
 ## 範圍
 
 - 高阻抗被動擷取 控制器→OLED 的 SPI
 - 把位元組流重建成畫面，鏡成第二螢幕
-- 研究自有評估板的第一螢幕回寫；尚未實作或驗證主動回寫
+- 不做主動回寫：這條路線已由使用者決定移除（2026-11-02），舊實作與評估見 commit `5e7149b`
 
 ## 安全護欄
 
-1. 現有被動探針只讀、不回寫、不接 MISO；唯一共用的電源連線是 `GND`（**不接 +5V**，避免回灌燒件）。主動回寫需要另設硬體與韌體，不沿用這組並接方式直接驅動。
+1. 探針只讀、不回寫、不接 MISO；唯一共用的電源連線是 `GND`（**不接 +5V**，避免回灌燒件）。
 1. RP2040 先 USB 通電再搭線（永不把活匯流排灌進未通電晶片）。
 
 ## 接線（被動、高阻抗）
@@ -61,31 +61,9 @@ sample:
     jmp  sample
 ```
 
-`spi_tap.c` 把三支探針腳全設輸入、以 OEOVER/OD 硬體鎖成永不驅動（純被動），DMA 持續收進 32 KiB ring，USB CDC 以 STP2 binary 小封包傳送（payload 上限 256 B，短尾 flush 目標 1 ms）；擷取不因 USB 傳送停止。預設 SPI mode 0；實測極性不同就改 `.pio` 的 `wait` 邊緣。
+`spi_tap.c` 把三支探針腳全設輸入、以 OEOVER/OD 硬體鎖成永不驅動（純被動），DMA 持續收進 32 KiB ring，USB CDC 以 binary 封包傳送（bus 閒置 2 ms 送一包，單包上限 2048 B）；擷取不因 USB 傳送停止。預設 SPI mode 0；實測極性不同就改 `.pio` 的 `wait` 邊緣。
 
-### 擷取鏈自測（P-1，晶片內 loopback，無外接跳線）
-
-接真評估板前，先確認**擷取鏈本身是對的**（PIO 取樣 ＋ DMA ＋ USB CDC）。做法是同一顆 RP2040「自己驅動、自己擷取同一組腳」，不接跳線、不接目標板：
-
-- `loopback_test.c` 用 **SIO（一般 GPIO 輸出）** 在 GP10/11/12 打一組已知 mode-0 波形（第 _i_ 個位元組 = `i & 0xFF`），再用**與正式韌體同一支** `spi_tap.pio` 把同一組腳當輸入讀回、比對。
-- 關鍵事實：RP2040 的 **PIO 輸入永遠接在 pad 的輸入同步器上，與輸出 FUNCSEL 無關**，故 SIO 驅動輸出、PIO 讀輸入可在晶片內 loopback，毋需外部跳線。
-- ⚠ `loopback_test` 會把腳設成**輸出**，**絕不可**在接著目標板時燒；只有 `bus_probe` 與 `spi_tap` 是被動的。
-
-```bash
-ninja -C poc/build/spi-tap loopback_test
-picotool load -x -f poc/build/spi-tap/loopback_test.uf2
-python3 poc/host/usb_probe.py --read 8
-```
-
-**實測（Feather RP2040，本機）**[證實]：連續多 round 全 `PASS`，每 round **16384/16384 位元組零不符**，擷取開頭 `00 01 02 … 1f`，與驅動端一致。
-
-```
-# loopback_test ready (DI=GP10 CLK=GP11 CS=GP12) — on-chip self-test, no jumper
-round 0: PASS  (0/16384 bytes mismatch)
-  head: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
-```
-
-結論：**PIO 取樣（mode-0、CS 為 frame 邊界、MSB-first autopush）＋ DMA ＋ USB CDC 這條擷取鏈端到端正確。** 自測後重燒回 `spi_tap.uf2`。
+**[證實：Feather RP2040 自測]** 擷取鏈曾以晶片內 loopback 驗證：同一顆 RP2040 用 SIO 打已知 mode-0 波形，再用正式韌體同一支 `spi_tap.pio` 讀回，連續多 round 每 round 16384/16384 B 零不符。結論是 PIO 取樣（mode-0、CS 為 frame 邊界、MSB-first autopush）＋ DMA ＋ USB CDC 這條鏈正確。自測程式已移除，見 commit `de752ed`。
 
 <!-- answer: P-1 -->
 
@@ -94,40 +72,38 @@ round 0: PASS  (0/16384 bytes mismatch)
 位元組流依一般點陣 OLED 控制器的「欄定址＋每欄 8 垂直像素」佈局重建 128×64 framebuffer，印成半格 ASCII。
 
 - `live_mirror.py`：**即時第二螢幕**——邊收串流邊重建，終端原地重繪；預設等待完整 `B0..B7` 頁序列（`--page` 同義），`--raw` 顯示最新 1024 B 的未對齊診斷畫面；`--file <cap>` 重播擷取檔。
-- `raster.py`：把單一擷取檔還原成一張靜態畫面。
 
-> ⚠ 四線（DI/CLK/CS/GND）**不含 D/C（資料／命令）線**，故位元組流中命令與像素未硬分。**[證實：程式檢查]** 舊版非零密度搜尋無法確認左上角，舊版 `--page` 亦可能跳過頁首低值像素。現版改以完整八頁序列核對位置，不再依像素密度選幀，也不跳過頁首像素。這仍是以已觀察格式重建；面板實際起點與顯示方向尚須對照確認。
+> ⚠ 四線（DI/CLK/CS/GND）**不含 D/C（資料／命令）線**，故位元組流中命令與像素未硬分。現版以完整八頁序列核對位置，不依像素密度選幀，也不跳過頁首像素。這是以已觀察格式重建。
 
-**[證實：2026-11-01 裝置擷取與重播]** 本機 `_output/screen1/device-sample-01.txt` 共 96,256 B 匯流排資料，分為 47 個 2048 B dump。逐區塊獨立掃描得到 47 組完整序列：`B0 + 128 B`、`B1 + 128 B`，依此至 `B7 + 128 B`；每頁 marker 相距 129 B。以這個樣本修正：
+**[證實：真機擷取]** 全畫面更新為 `B0 + 128 B`、`B1 + 128 B`，依此至 `B7 + 128 B`；每頁 marker 相距 129 B。重建規則：
 
-- 只收整行 1–32 bytes 的偶數長度 hex，忽略 banner／狀態文字。
-- 收到完整八頁才更新；新空白畫面可取代舊畫面，不再偏好舊的高密度畫面。
+- 收到完整八頁才更新；新空白畫面可取代舊畫面。
 - 不將孤立 `0xBn` 當頁起點，不跳過 `0x00`、`0x10` 等有效像素。
-- 空行表示 firmware dump 邊界；不跨邊界拼幀，保留上一個完整畫面直到取得新幀。資料相同時不重繪。
+- 串流 gap 時不跨邊界拼幀，保留上一個完整畫面直到取得新幀。資料相同時不重繪。
 
-**[限制]** 此顯示格式解碼不涵蓋只有局部頁更新或插入欄命令的其他協定。舊韌體傾印時停止擷取，可能漏掉某次畫面；主機修正不能補回漏掉的 bytes。完整 framebuffer 的頁／欄起點已依捕獲序列定位，與照片的精確像素對齊仍待確認。
+**[限制]** 此顯示格式解碼不涵蓋只有局部頁更新或插入欄命令的其他協定。
+
+**[證實：使用者肉眼對照]** 鏡像與實體螢幕的內容、方向一致。128×64 點數少，肉眼足以確認；未做像素級比對。
 
 ### 保留被篩掉的資料與時間資訊
 
-**[證實：程式與回歸測試]** `live_mirror.py` 即時執行時，預設將收到的每個 serial chunk（新版為 binary，舊版為 hex 文字）**先存檔，再解析**，存至 `_output/captures/mirror-<UTC>-<unique>.txt`。含 banner、空行、不合 hex 格式的內容，以及退出時未收完一行的 bytes；不是終端 ASCII 畫面截圖。可以指定檔名（不覆寫既有檔案）：
+**[證實：程式與回歸測試]** `live_mirror.py` 即時執行時，預設將收到的每個 serial chunk **先存檔，再解析**，存至 `_output/captures/mirror-<UTC>-<unique>.bin`。含壞包與退出時未收完的封包；不是終端 ASCII 畫面截圖。可以指定檔名（不覆寫既有檔案）：
 
 ```bash
 # 分別記錄左右移動游標、screensaver 喚醒兩個情境；Ctrl-C 結束並完成紀錄。
-python3 poc/host/live_mirror.py --capture _output/pin-cursor-01.txt
-python3 poc/host/live_mirror.py --capture _output/screensaver-wake-01.txt
+python3 poc/host/live_mirror.py --capture _output/pin-cursor-01.bin
+python3 poc/host/live_mirror.py --capture _output/screensaver-wake-01.bin
 
-# 替舊的原始擷取建立相同診斷紀錄，輸出新檔並保留來源。
-python3 poc/host/live_mirror.py --file _output/pin-cursor-01.txt \
-  --capture _output/pin-cursor-reviewed-01.txt
+# 替既有擷取重建診斷紀錄，輸出新檔並保留來源。
+python3 poc/host/live_mirror.py --file _output/pin-cursor-01.bin \
+  --capture _output/pin-cursor-reviewed-01.bin
 ```
 
-旁邊的 `<capture>.events.jsonl` 記錄：serial chunk 的檔案 offset／長度／主機相對時間、完整 frame 的匯流排 offset、實際 render 時間，以及在 dump 邊界、buffer 裁切、退出時**未用於完整 frame 且尚未辨識為命令的 bus bytes**（`unmatched_bus_bytes`，含 `hex`、`bus_offset`、`reason`）。不將這些 bytes 一律判成雜訊或命令；可能包含初始化、其他協定或被截斷的畫面。`non-hex-line` 與 `partial_serial_line` 另留原始 bytes。檔案與事件逐次 flush；收到完整畫面以前亦會存檔。重播紀錄的 `source` 為 `replay`，其時間代表重播速度，不能當成原始擷取時間。
-
-**[證實：舊版程式檢查]** 舊 firmware 等待 2048 B 收滿才送出，且 USB 傾印期間停止 PIO。單次全畫面約 1039 B（含 frame 前綴），可能留在尚未滿的 buffer 裡；主機紀錄只能保存 firmware 實際送達的資料。先前 47 個 dump 各只有一個完整八頁序列，與「約半數更新能鏡像」的觀察相符；**[推測]** 游標／喚醒漏鏡像可能來自等待收滿或漏擷取，尚不能認定為局部更新。終端重繪上限已由約 6.7 Hz 提高為 30 Hz；這不會補回 firmware 沒送出的資料。現已改為持續 DMA 與短週期送出（見下節）；是否需要局部更新解碼仍須依新的完整擷取判定。
+旁邊的 `<capture>.events.jsonl` 記錄：serial chunk 的檔案 offset／長度／主機相對時間、完整 frame 的匯流排 offset、實際 render 時間，以及在串流 gap、buffer 裁切、退出時**未用於完整 frame 且尚未辨識為命令的 bus bytes**（`unmatched_bus_bytes`，含 `hex`、`bus_offset`、`reason`）。不將這些 bytes 一律判成雜訊或命令；可能包含初始化、其他協定或被截斷的畫面。`transport_noise` 與 `partial_transport_packet` 另留原始 bytes。檔案與事件逐次 flush；收到完整畫面以前亦會存檔。重播紀錄的 `source` 為 `replay`，其時間代表重播速度，不能當成原始擷取時間。
 
 ### 已知顯示命令註解
 
-**[證實：擷取格式與重播]** 最新 55.3 秒樣本有 217 個完整畫面；每個畫面前固定 7 B 為 `D5 xx 81 yy A6 C0 A0`，其中此樣本 `xx` 為 `6F/7F/8F/9F`，`yy` 為 `FF`。現於 `.events.jsonl` 以每幀一筆 `display_commands` 記錄這五個 prefix 命令及八個 `B0..B7` page 命令。每個項目包含 `bus_offset`、`length`、原始 `hex`、`opcode`、`parameters`、命令名稱與 `decoded` 欄位。
+**[證實：擷取格式與重播]** 55.3 秒樣本有 217 個完整畫面；每個畫面前固定 7 B 為 `D5 xx 81 yy A6 C0 A0`，其中此樣本 `xx` 為 `6F/7F/8F/9F`，`yy` 為 `FF`。現於 `.events.jsonl` 以每幀一筆 `display_commands` 記錄這五個 prefix 命令及八個 `B0..B7` page 命令。每個項目包含 `bus_offset`、`length`、原始 `hex`、`opcode`、`parameters`、命令名稱與 `decoded` 欄位。
 
 | 命令 | 事件名稱 | 解碼欄位（SSD1306-compatible profile） |
 |---|---|---|
@@ -142,136 +118,66 @@ python3 poc/host/live_mirror.py --file _output/pin-cursor-01.txt \
 
 只有緊貼完整八頁畫面之前、符合上述完整 7 B grammar 的資料才辨識為 prefix；不在像素 payload 中搜尋 opcode，不跨已知 gap 拼接命令。clock／contrast 參數可變，也接受同組命令的 inverse／reverse／remap 變體；其餘未知或不完整 prefix 仍保留為 unmatched。命令即使未改變 framebuffer 也逐幀記錄；此步為註解，不依命令改變鏡像像素或預測下一個 clock 值。`--raw` 未對齊模式不做命令分類。
 
-本機 `_output/captures/mirror-20261101T132401Z-7e7988-known-commands.txt.events.jsonl` 為原擷取的新版註解重播：1,519 B prefix 全部辨識、1,736 個 page marker 已註解，未分類資料為 0 B；217 個 framebuffer 均保留，原始串流副本逐 byte 相同。驗證摘要：`_output/protocol-research/known-commands-validation.json`。
-
-### 第一螢幕回寫：可行性與硬體前提
-
-**[證實：程式與接線文件]** 現有四線探針只是並接到原控制器與 OLED 之間，沒有 mux、輸出隔離或控制權交接線；`spi_tap` 亦以 OEOVER／pad OD 禁止驅動。**[待驗證]** 原控制器在閒置時是否釋放輸出、實際 OLED 型號、命令／資料訊號與邏輯電壓尚未確認，因此目前不能宣稱只改韌體便能回寫。
-
-**[推測：依一般 SPI 電氣模型]** 原控制器可能在無傳輸時仍以 push-pull 驅動 CS、CLK 與 DI。CS 高只表示 OLED 未被選取，不表示控制器輸出已呈高阻抗；RP2040 此時拉低 CS 或切換 CLK／DI，仍可能造成輸出互撞。等待一段無邊緣時間也無法保證原控制器不會在下一刻開始傳輸。此判斷依 [TI SPI 介面說明](https://www.ti.com/document-viewer/lit/html/slla522)；實際板子的輸出行為仍須量測／查原理圖。
-
-可研究的硬體方案：
-
-- **原控制器協作交接**：原控制器停止傳輸並釋放所有相關輸出，明確交出與收回控制權。
-- **受控切換路徑**：在控制器與 OLED 之間加入 mux 或具輸出使能的 buffer，確保切換期間與寫入期間不會讓兩個輸出端同時驅動 OLED；須定義切換時序、原控制器在隔離期間的更新處理，以及交還後的畫面／定址狀態同步。
-- **先單獨驗證 OLED**：斷開原控制器，用符合電壓的驅動端確認命令、定址、像素資料與時序，再設計共用方案。
-
-**[待驗證：命令／資料與電壓]** 我們的「四條線」包含 GND，並未擷取 D/C。SSD1306 的 4-wire SPI 另有 D/C 訊號，3-wire SPI 則以每字 9 bit 包含 D/C；不能因四線擷取可重建，就假設四線足以正確寫入。須依實際介面補齊控制訊號。既有 DC 電表讀值也不足以確定高／低振幅與輸入容限，不能據此直接把 RP2040 的 3.3 V 輸出接回板子。參考 [SSD1306 datasheet §8.1.3–8.1.4](https://www.orientdisplay.com/wp-content/uploads/2020/11/SSD1306.pdf#page=17)。
-
-**[推測：SSD1306-compatible 解碼]** `D5 6F/7F/8F/9F` 的低四位均為 `F`，對應除頻 16；高四位為 oscillator setting 6／7／8／9。它調整 OLED 內部掃描時脈，並不指定外部 SPI CLK、下次傳輸時刻或可用的寫入窗口。在此命令模型中，寫 GDDRAM 不要求先猜中下一個 `D5` 參數；應保存已觀察的顯示設定，只在實驗需要時改動。原控制器之後重繪也可能覆蓋實驗畫面。實際晶片尚未確認，因此這是條件式解釋，並非對該板子的回寫驗證。依據：[SSD1306 datasheet §10.1.16](https://www.orientdisplay.com/wp-content/uploads/2020/11/SSD1306.pdf#page=40)。
-
-已新增獨立的 [`display_write_test` 與手動送圖指令](../poc/rp2040-spi-tap/display-write-test.md)，準備了 ENS Font「腦哥」128×64 候選畫面；建置／離線驗證、燒錄與 USB HELLO 通過。**[證實：使用者回報]** 使用者送圖收到 `DONE 1024 49dd1d65 HIGH_Z`，但實體畫面未變，並確認目前只知道 `+5V vUSB / GND / ON / CS / CLK / D1`，沒有已確認的 D/C 接點。此 writer 的 GP9 D/C 是未驗證的硬體假設，不能套用於現有接線；DONE 也沒有驗證 OLED 端實際波形或接受命令。現已還原原被動 `spi_tap`，flash verification 通過，USB 恢復 `SPI Tap Stream v2`。
-
-**[待驗證：framing]** 先前 `wiring.html` 的「三線 SPI、D/C 內嵌」說法亦無足夠證據，現已更正。缺少可見 D/C 接點不證明採用標準 9-bit SPI；目前 8-bit 打包的穩定命令／像素序列也不支持直接改用 9-bit writer。下一步須保留 CS 邊界、CLK 邊緣數與 DI bits 以確認真正 framing，並確認控制器／線路電壓與可隔離／交接的接點。`ON` 用途未確認，不猜作 D/C、不驅動；+5V vUSB 維持不接。此階段尚未確認可用現有接點直接回寫。
-
-### 連續串流韌體（STP2）
+### 連續串流韌體
 
 **[證實：建置與程式檢查]** `spi_tap.c` 使用 byte DMA 寫入 32 KiB、自然對齊的循環 buffer。第二條 DMA channel 在 ring 完成時以硬體重啟資料 DMA；IRQ 只計數 ring 次數，不負責即時 rearm。PIO 持續取樣，USB 由主迴圈以 TinyUSB 可用空間非阻塞送出，沒有每 byte `printf`。三條探針仍保持輸入、OEOVER 強制關輸出與 pad OD；不切到 PIO 輸出功能。
 
-- 每包 payload 最多 256 B；有資料時目標每 1 ms flush 短尾，即使只有單次重繪也不等待下一個畫面。
+- 有資料後等 bus 閒置 2 ms 才送一包；單包原始資料上限 2048 B，最舊 byte 最多等 20 ms，避免慢速資料無限延遲。韌體不解析內容。
 - 空閒時每 250 ms 送 status heartbeat；主機／USB 排程不提供硬即時延遲保證。
 - ring 接近追上尚未消費資料時，保守丟棄該 backlog，累計 `dropped_total` 並遞增 `loss_epoch`。主機太慢或未連線時不能保證零遺失。
 - `stall_events` 計數 PIO RXSTALL sticky flag 的觀察次數；不是精確漏 bit／byte 數。若發生 stall，像素／位元組對齊亦可能失效，不能僅靠清 counter 宣稱已恢復。
 - 新讀取 session、sequence／offset 不連續、epoch／drop／stall counter 改變或 CRC resync，才中斷主機組幀；USB 封包邊界不會中斷組幀。
 
-線上格式為 32 B little-endian header：`<4sBBHIIIIII`，依序為 `STP2`、type（1=data、2=status）、flags（bit0=session start、bit1=packet RLE）、線上 payload 長度、packet sequence、device timestamp（us）、device byte offset、loss epoch、dropped total、stall events；後接 payload，再接 4 B IEEE CRC32（header+線上 payload）。32-bit counters／時間會回繞，序號與 offset 以模 2³² 檢查。device offset 含已知 ring 丟棄 bytes，且總是按解壓後的原匯流排 byte 數計算；診斷裡的 host `bus_offset` 則只計已交付解碼的 bytes，兩者須區分。
+**控制指令與 frame 同一包 [證實：既有擷取]。** 一個 frame 是 1039 B：7 B 控制指令 `D5 xx 81 FF A6 C0 A0`，加 8 ×（1 B 頁指令 + 128 B 像素）。它們在同一段連續傳輸裡，閒置切包自然合成一包：真機約 9.6 fps 的 290 包全為 1039 B；另一次擷取有 1 包 1063 B，是開頭多 24 B 初始化指令（`AE 00 10 B0 …`）再接 frame。`xx` 在樣本中有 `6F/7F/8F/9F` 四種值，所以這 7 B 不是完全固定，也不另外省略：每 frame 最多只省約 15 B，卻會失去逐 byte 無損。
 
-`live_mirror.py` 自動辨識 STP2 或舊版 hex。新 `.bin`／`.txt` capture 都是逐 byte 原始存檔，副檔名不決定格式；terminal ASCII 僅是顯示層。`usb_probe.py --read` 對新版輸出可讀 hex／status，**不是**原始 binary 存檔方式。`raster.py` 仍只讀 hex，binary 重播請用 `live_mirror.py --file <capture>`。
+線上有兩種封包，little-endian，32-bit counters／時間會回繞：
 
-**[證實：Feather RP2040 燒錄與 45 秒實測]** `picotool load -v -x -f` 完成燒錄、逐 byte 驗證及重開，USB product 為 `SPI Tap Stream v2`。本機 `_output/screen1/stream-v2-bench-01.bin` 共 546,447 B 原始 serial 資料，解出 2,710 包、448,849 B 匯流排 payload、432 個完整畫面，終端亦實際重繪 432 次（本次約 9.6 fps）。期間無 CRC／header 錯誤、`dropped_total` 增量 0、`stall_events` 增量 0、loss epoch 固定；開始讀取時有一次途中接入的 transport resync。device offset 跨過多次 32 KiB ring 邊界而保持連續，亦收到 1 B 短尾封包。以每 113 B 重新切割原始檔重播，payload 與 framebuffer 重建一致；統計存於 `stream-v2-validation-01.json`。這是此樣本的量測，不代表任意 SPI 負載均不會 overflow，也尚未獨立確認兩種按鍵情境。
+- **data**（開銷 12 B）：8 B header `<2sBBHH`，依序為 `S3`、flags（bit1=RLE）、sequence 低 8 位、線上 payload 長度、offset 低 16 位；後接 payload 與 4 B IEEE CRC32。不帶 device timestamp，事件中 `device_us` 為 null。
+- **status**（固定 36 B）：32 B header `<4sBBHIIIIII`，依序為 `STP2`、type（2=status）、flags（bit0=session start）、長度 0、packet sequence、device timestamp（us）、device byte offset、loss epoch、dropped total、stall events；後接 4 B CRC32。magic 沿用舊字串。session 開始、epoch 改變（所有 drop／stall／重連都會遞增）時先送 status 才送下一包 data。
 
-### 可選的逐包無損壓縮（`spi_tap_rle`）
+host 以最近狀態加低位元還原完整 sequence／offset，不連續時中斷組幀。device offset 含已知 ring 丟棄 bytes，且總是按解壓後的原匯流排 byte 數計算；診斷裡的 host `bus_offset` 則只計已交付解碼的 bytes，兩者須區分。
 
-**[證實：程式與離線驗證]** 新增獨立的被動建置 `spi_tap_rle.uf2`，USB product 為 `SPI Stream v2 RLE`（避免 SDK 預設 19 字元限制截斷產品名）。每包仍處理最多 256 B 原匯流排資料，不組 frame、不等待下一個畫面，也不丟棄命令或未知 bytes。原 `spi_tap.uf2` 保留未壓縮格式。PIO、DMA、短尾 flush 與輸入防驅動鎖不變。
+壓縮僅使用 byte-run coding，每包獨立解碼，無上一包字典或上一張 framebuffer 依賴：
 
-壓縮僅使用 byte-run coding：
-
-- flags bit1 (`0x02`) 表示 RLE，僅用於 data 包；status 保持未壓縮。
-- RLE payload 前 2 B 是 little-endian 原始長度（1..256），後接 runs。
+- flags bit1 (`0x02`) 表示 RLE。RLE payload 前 2 B 是 little-endian 原始長度（1..2048），後接 runs。
 - tag `0..127`：後接 `tag+1` 個 literal bytes。
 - tag `128..255`：後接一個 byte，重複 `(tag & 127)+3` 次（3..130）。
-- 包含 2 B 原始長度後仍小於 raw payload 才壓縮，否則送 raw；無法壓縮的內容不膨脹。header 與 CRC 長度不變。
-- CRC 先檢查線上 bytes，再做有長度上限的解壓；格式／CRC 壞包會中斷組幀。各包獨立，無上一包字典或上一張 framebuffer 依賴。序號／offset／epoch／drop／stall 的連續性規則保留。
+- 包含 2 B 原始長度後仍小於 raw payload 才壓縮，否則送 raw；無法壓縮的內容不膨脹。
+- CRC 先檢查線上 bytes，再做有長度上限的解壓；格式／CRC 壞包會中斷組幀。
 - host `stream_packet.payload_length` 為解壓後的原長度，`wire_payload_length` 為線上長度，`compressed` 標記有無 RLE。原始 capture 仍保存線上 bytes，解壓發生於匯流排解碼之前。
 
-主機 status bar 第二行顯示：
+capture 是逐 byte 原始存檔，副檔名不決定格式；terminal ASCII 僅是顯示層。`usb_probe.py --read` 可讀 hex／status，**不是**原始 binary 存檔方式。重播請用 `live_mirror.py --file <capture>`。
+
+主機 status bar 第二、三行顯示（第三行僅 live；終端需至少 37 列）：
 
 ```text
-compression saved% min/max/avg=48.8/82.3/71.4
+compression saved% min/max/avg=77.8/91.9/87.0
+rate(2s) wire=10.6 kbit/s (1.32 kB/s)  bus=80.2 kbit/s
 ```
 
-這是**節省百分比**，越高越好。min/max 是開啟此 capture 後原始 payload **≥128 B** 的有效 **data packet** 的最低／最高節省率，包含每包 32 B header 與 4 B CRC：`100 × (1 − (36 + wire_payload_length)/(36 + payload_length))`。較小的包不計入 min/max：它們多半是 flush timer 切出的 frame 首尾零碎 bytes（1–4 B 無法壓縮），反映的是切包時機而非畫面內容。avg 則涵蓋所有 data 包、以累計原封包 byte 數加權，`100 × (1 − 累計線上封包 bytes/累計原封包 bytes)`，不是各包百分比的算術平均，因此仍反映小包的實際開銷。raw fallback 算 0%，idle status heartbeat 與壞包不計；尚未收到 ≥128 B 的 data 或重播 legacy hex 時 min 顯示初值 `100.0`、max 顯示 `--`，avg 在收到任何 data 前顯示 `--`。數據累計至這次 host process／重播結束，不因串流 gap 重置。
+第一行是**節省百分比**，越高越好。min/max 是開啟此 capture 後有效 data 包的最低／最高節省率，包含每包 12 B 開銷：`100 × (1 − (12 + wire_payload_length)/(12 + payload_length))`。avg 涵蓋所有 data 包、以累計原封包 byte 數加權，不是各包百分比的算術平均。raw 算 0%，所以真的出現 1–4 B 的短傳輸時 min 會是 0。status 與壞包不計；尚未收到 data 時 min 顯示初值 `100.0`、max／avg 顯示 `--`。數據累計至這次 host process／重播結束，不因串流 gap 重置。
 
-TTY 在畫面像素未改變時仍每 250 ms 更新 status，不重繪 framebuffer，也不增加 `updates` 計數。等待第一個畫面時顯示 wake/change-screen 提示。原始與壓縮 STP2 檔案重播同樣顯示統計；每次結束時在 `.events.jsonl` 加入 `compression_summary`，記錄有效 data 包數、原／線上封包 bytes 及 min/max/avg。
+rate 是最近 2 秒的流量，以固定 2 秒為分母，因此開始的前 2 秒是逐步爬升。`wire` 是實際從序列埠讀到的 bytes，含 header、heartbeat 與壞包；`bus` 是解壓後交付解碼的匯流排 bytes。與 UART 比較時請看 kB/s：9600 baud 8N1 每 byte 佔 10 bits，上限是 960 B/s，不是 9.6 kbit/s 的資料量。`--file` 重播是全速讀檔，不顯示 rate。
 
-**[證實：相同封包切法的離線重編碼]** 包含全部 STP2 header／CRC，以下只計有效封包；第一份來源前方 38 B 非封包資料不計入基準：
+TTY 在畫面像素未改變或等待第一個畫面時仍每 250 ms 更新 status，不重繪 framebuffer，也不增加 `updates` 計數。每次結束時在 `.events.jsonl` 加入 `compression_summary`（data 包數、原／線上封包 bytes 及 min/max/avg）；live 另加 `rate_summary`（總 bytes 與 wire／bus 的平均、尖峰 B/s）。
 
-| 來源 | 原封包總量 | RLE 封包總量 | 減少 | 依原擷取時長換算 |
-|---|---:|---:|---:|---|
-| 45.026 秒、432 frame | 546,409 B | 159,140 B | 70.88% | 12.14 → 3.53 kB/s |
-| 55.318 秒、217 frame | 279,067 B | 96,970 B | 65.25% | 5.04 → 1.75 kB/s |
+**[證實：真板擷取]** 目前韌體經 picotool flash verification，USB product 為 `SPI Stream v3 Frame`。`_output/captures/mirror-20261101T164415Z-576a5b.txt` 共 455.6 秒、1,768 個 data 包，每包都是 1039 B；無 CRC／header 錯誤，除開頭 session-start 外無 stream gap，`stall_events` 為 0，`dropped_total` 全程不變（連線前丟棄的量不計）。最忙的 30 秒有 290 個 frame（約 9.67 fps）、1.43 kB/s（148 B/frame）；全程單 frame 為 80–452 B、平均 140 B，min/max/avg 為 `57.0/92.4/86.7`。此為這次畫面／負載的量測，不是任意 SPI 負載的保證；流量仍超過 9600 baud 8N1 的 960 B/s，約 1.4 kB/s 也不是 Bluefruit 的實測吞吐量。UART／BLE bridge 仍待實作與量測，資料見 [`bluefruit-ble.md`](bluefruit-ble.md)。
 
-兩份解壓後匯流排 SHA-256、frame offset／changed 事件及最終 framebuffer 均相同。較低資料率來自第二份畫面更新較少，不代表壓縮能固定達到某個 rate。原始 45 秒樣本逐包 DEFLATE level 1（同樣加 2 B 長度、不划算則 raw）為 178,382 B，比 RLE 的 159,140 B 大；frame-only XOR+RLE 在該樣本也沒有優於直接 RLE，且不保留全部匯流排 bytes，因此本次採無跨包依賴的 RLE。
+**host 開埠不可清輸入 [證實：對照實驗]。** `tty.setraw` 預設的 `TCSAFLUSH` 會丟掉韌體開埠後立刻送出的 session-start status（4／4 次遺失，`TCSANOW` 為 4／4 次收到）。data 包不帶 epoch／drop 狀態，高負載下又沒有 heartbeat，丟掉它 host 就不知道這些狀態，所以 `live_mirror.py` 用 `TCSANOW`。
 
-**[證實：建置與 host 驗證]** 原生 C／Python encoder 逐 byte 一致，覆蓋 772 組 raw／重複／混合資料；測試涵蓋截斷、過長解壓、CRC／sequence gap 與 raw/RLE 混合串流。兩份真擷取重播無損。Feather Release ELF 的 flash code 由 26,052 B 增至 26,728 B（+676 B，使用縮短後的 USB product 字串），static BSS 都是 37,000 B；encoder 直接使用既有 packet buffer，沒有額外壓縮 scratch buffer。host 共 54 項測試通過，含按 byte 加權平均、忽略 heartbeat／壞包，以及相同像素下只更新 TTY status 的檢查。
+### 下一步候選：跨包串流壓縮（未實作）
 
-**[推測／待實測：CPU 與 BLE]** 編碼為單次線性掃描、每包最多 256 B；PIO／DMA 在壓縮期間仍持續收資料。下方真板測試在約 9.6 fps 負載下沒有 drop／stall，支持 RP2040 可負擔此樣本的壓縮工作；尚未獨立量測新增 CPU 時間或測出最大可承受負載。約 3.5 kB/s 不是 Bluefruit 的實測吞吐量，且仍超過 9600 baud 8N1 的 960 B/s 上限。UART／BLE bridge 仍待實作與量測。
+**[推測：離線模型，未上板]** 每包獨立的 RLE 無法參照上一張畫面。視窗要大於一個 frame（1039 B）才有效，所以下表 2 KB 起明顯改善。以下每 frame 含 36 B 開銷，換成現行 12 B 時每 frame 再少 24 B：
 
-重現離線驗證（純 Python 標準庫）：
+| 方案（每 frame 一包） | B/frame | RAM |
+|---|---:|---|
+| LZ4 1 KB 視窗 | 194 | 可行 |
+| LZ4 2 KB 視窗 | 138 | 可行 |
+| **LZ4 4 KB 視窗** | **113** | 視窗可共用 32 KB ring，另需 hash 表 |
+| heatshrink 2 KB 視窗 | 205 | 可行，但不划算 |
+| DEFLATE 4 KB 視窗 | 105 | 約 20 KB，CPU 較重 |
 
-```bash
-python3 poc/host/benchmark_compression.py _output/screen1/stream-v2-bench-01.bin \
-  --seconds 45.025662 --out _output/compression/replay-rle.bin
-python3 poc/host/live_mirror.py --file _output/compression/replay-rle.bin
-```
-
-`--out` 不覆寫既有檔。benchmark 會比對原始／解壓 bus hash、frame 事件與最終 framebuffer，輸出 JSON；本次結果在 `_output/compression/bench-rle-validation.json` 與 `known-commands-rle-validation.json`。
-
-啟用需先停止正在讀 serial 的舊 host process；更新程式後重新執行 Python 才會載入新 decoder。舊 decoder 不認得 RLE flag，不能接壓縮韌體：
-
-```bash
-export PICO_SDK_PATH=$HOME/pico-sdk
-cmake -S poc/rp2040-spi-tap -B poc/build/spi-tap -G Ninja -DPICO_BOARD=adafruit_feather_rp2040
-ninja -C poc/build/spi-tap spi_tap_rle
-# 先 Ctrl-C 停止目前 live_mirror，再燒錄；兩種韌體都保持被動輸入。
-picotool load -v -x -f poc/build/spi-tap/spi_tap_rle.uf2
-python3 poc/host/live_mirror.py
-```
-
-**[證實：RLE 安裝與真板擷取]** 已依使用者要求燒錄 `spi_tap_rle.uf2`，picotool flash verification 通過，USB 正常列舉為 `SPI Stream v2 RLE`。更新前 serial port 已無其他 reader，無需終止既有 capture。第一個 20 秒檢查只有 80 個正常 status heartbeat；第二次擷取收到真正畫面資料，在 pseudo-terminal 執行新版 `live_mirror.py` 確認狀態列：
-
-- 30.077 秒、289 frame／289 次重繪，約 9.61 fps。
-- 1,802 個有效 data 包；未壓縮等價量 365,144 B，實際 104,555 B，即 12.14 → 3.48 kB/s。
-- status 顯示 `compression saved% min/max/avg=0.0/82.3/71.4`；avg 精確值為 71.366%。最小 0% 來自不適合壓縮的小 raw 包（當時 min/max 計入所有 data 包；現行規則只計 ≥128 B，同一擷取為 `48.8/82.3/71.4`）。
-- 沒有 CRC／header／壓縮解碼錯誤，沒有 stream gap，`dropped_total` 與 `stall_events` 增量都為 0。
-
-原始擷取為 `_output/compression/live-rle-20261101T234620.bin`，旁有 `.events.jsonl`；實際終端輸出在同名 `.terminal.log`，摘要為 `_output/compression/live-rle-status-validation.json`。此為這次畫面／負載的量測，不是 BLE 或任意 SPI 負載的保證。需還原時燒錄原 `spi_tap.uf2`；新版 host 同時支援 raw 與 RLE。
-
-### 用照片建立像素參考，再核對 SPI 起點
-
-**[證實：2026-11-01 本機轉換]** `~/Downloads/screen1.heic` 可取樣成 128×64 的視覺參考，匯出 1024 B 垂直欄打包資料。**[推測]** 此照片的格距約為 `(18.25, 18.15)` 個照片像素，帶輕微傾斜；以下 origin 是候選畫布 `(0,0)` 的像素中心，**不是已確認的面板左上角**。照片無清楚的面板邊界，黑色邊界仍有整數像素位移的不確定性。
-
-```bash
-# HEIC/PNG 等格式用本機 ImageMagick 解碼；若輸入 8-bit binary PGM 則只需標準庫。
-python3 poc/host/photo_reference.py ~/Downloads/screen1.heic \
-  --out _output/screen1/reference \
-  --origin 458.85 130.38 --pitch 18.25 18.15 --shear=-0.004
-
-# reference.hex 可直接交給既有靜態檢視器。
-python3 poc/host/raster.py _output/screen1/reference.hex
-
-# 用「同一個畫面」的真實擷取核對各頁的候選資料起點。
-python3 poc/host/compare_reference.py capture.txt _output/screen1/reference.bin \
-  --mask _output/screen1/reference.mask.bin > _output/screen1/comparison.json
-```
-
-輸出 `.bits.txt` 每行為從左到右的 128 個像素，共 64 行；`.bin` / `.hex` 的位址是 `page*128+x`，bit 0 為該頁最上列。它是**預期像素參考**，不含命令，也不宣稱是實測的線上位元順序。`.pbm` / `.preview.pgm` 供目視檢查，`.json` 記錄來源雜湊與取樣參數；`.mask.bin` 排除亮度不確定的像素，但不代表幾何位置已確認。照片及衍生檔留在忽略版控的 `_output/`。
-
-比較工具以遮罩後的像素 Hamming distance 排出每頁候選位址，附前後各 8 B 以查找頁／欄命令；位址單位是解碼後的**匯流排 bytes**。頁面各自比對，可能來自不同重繪，不能僅憑最低誤差就宣稱鎖定一個完整 frame。可用 `--shift-x N --shift-y N` 檢驗照片黑邊的候選位移；平移新露出的像素不參與比對。
-
-**[待驗證]** 已收到裝置 SPI 樣本並依頁序列修正同步規則；照片參考與同一畫面的精確比對、欄偏移與面板顯示方向仍待確認。舊版 2048 B dump 之間不能視為無縫匯流排；新版 STP2 則依序號、byte offset、loss epoch 與 CRC 決定連續性。
-
-驗證工具：`python3 -m unittest discover -s poc/host -p 'test_*.py' -v`（含鏡像與照片參考的回歸測試）。
+建議 LZ4 4 KB：換算現行開銷約 89 B/frame，9.6 fps 下約 0.86 kB/s，才低於 960 B/s，但餘裕很小。此數字偏樂觀：模型每次比對最多 32 個候選，快速版 LZ4 通常只比對一個；也未計定期重置字典的成本。代價是掉一包後要到字典重置才能解碼，走 UART／BLE 時必須定期重置。CPU 只有粗估（125 MHz 下平均每 byte 約 12,000 cycle），要上板實測。重新評估可用 `_output/captures-s3/` 的匯流排資料。
 
 ## 量測與真機結果
 
@@ -286,13 +192,13 @@ python3 poc/host/compare_reference.py capture.txt _output/screen1/reference.bin 
 | `sample CS`（開機、靜態） | `1`[證實] | idle-high，證明探針有接、共地正常 |
 | `CLK rising/s`：靜態畫面 | `0`[證實] | write-on-change：靜態不 clocking |
 | `CLK rising/s`：切換畫面 | `8312`/重繪（峰 `16624`）[證實] | 每次重繪一突發，total 單調累積 2.03M→2.18M |
-| 真擷取（spi_tap，切畫面 32s） | `12,480 B`[證實] | 垂直欄打包；`raster.py` 還原出可辨識畫面字形 |
+| 真擷取（spi_tap，切畫面 32s） | `12,480 B`[證實] | 垂直欄打包；還原出可辨識畫面字形 |
 
 **實跑經過**（host build：`brew install picotool ninja`、`~/pico-sdk` shallow clone + tinyusb、cmake/ninja；`picotool load -x -f` 軟體進 BOOTSEL 成功）：
 
 1. **評估板關機時**：三線恆 0、零邊緣——因匯流排無人驅動（非接線問題）。排除接線假設的關鍵：開機後 `sample CS` 立刻讀到 `1`。
-2. **評估板開機**：靜態 `rising/s=0`、`CS=1`；切畫面時 `rising/s` 跳到 **8312/重繪**（峰 16624），`total` 單調累積。**結論：本次接線能取樣 CLK；更新行為符合 write-on-change。** 每次重繪約 8312 邊緣 ≈ 一張 128×64 全畫面（8192 bit）。先前由 DC 電表 1.8 V 直接推為訊號振幅並斷言不需電平轉換，證據不足；能被動讀取不代表可用 3.3 V 安全回寫。
-3. **真擷取**：block 由 16384 調小到 2048 B（bench／第二螢幕低延遲），切畫面擷得 **12,480 B** 原始垂直欄像素，`raster.py` 以 128 欄 × 頁重繪，**肉眼可讀出評估板畫面字形**——被動搭四線即可即時旁觀顯示內容，**於真機證實**。
+2. **評估板開機**：靜態 `rising/s=0`、`CS=1`；切畫面時 `rising/s` 跳到 **8312/重繪**（峰 16624），`total` 單調累積。**結論：本次接線能取樣 CLK；更新行為符合 write-on-change。** 每次重繪約 8312 邊緣 ≈ 一張 128×64 全畫面（8192 bit）。DC 電表 1.8 V 不等於已確認的訊號振幅。
+3. **真擷取**：切畫面擷得 **12,480 B** 原始垂直欄像素，以 128 欄 × 頁重繪，**肉眼可讀出評估板畫面字形**——被動搭四線即可即時旁觀顯示內容，**於真機證實**。
 
 | 觀察到 | 結論 |
 |---|---|
@@ -311,5 +217,41 @@ python3 poc/host/compare_reference.py capture.txt _output/screen1/reference.bin 
 - 其餘時間匯流排閒置；真機若為局部更新（只重畫變動區），每次突發只會**更小**——第二螢幕只會更輕鬆。
 - 取樣餘裕：PIO 可達 sysclk（125 MHz），對上幾 MHz 的匯流排遠非瓶頸。
 
+
+## demo run-of-show（第二螢幕）
+
+把這個做成一場 **10 分鐘 demo**：讓看的人親眼看到「碰得到顯示線 → 畫面被旁人的終端照抄」。reveal 是**終端機畫面**，現場跑 `live_mirror.py`。這份是 P-6（預錄＋排練）與 P-7（實演）的腳本底稿。
+
+| # | 拍子 | 現場動作 | 螢幕上出現什麼 | 時間 |
+|---|---|---|---|---|
+| 1 | **定場** | 一片評估板、一片 Feather RP2040、四條杜邦線。 | 投影片：接線示意（上文 mermaid）。 | 1.5 分 |
+| 2 | **搭線** | 指出評估板的 CS/CLK/DI/GND 測試點，接上被動探針。**預錄**。 | 預錄終端：`usb_probe.py` 回報 `RUNNING`，板子只是被動聽。 | 1.5 分 |
+| 3 | **第二螢幕（高潮）** | 跑 `live_mirror.py`，在評估板上切畫面。**現場跑**，決定性、可重播。 | 終端裡的 ASCII 螢幕**同步跟著評估板一起變**。 | 3 分 |
+| 4 | **轉折** | 收手：這是**被動**的、只讀、不回寫，評估板毫不知情。 | 投影片：被動搭線為何擋不住。 | 2 分 |
+| 5 | **防護** | 落到設計：顯示路徑碰得到就守不住，怎麼辦？ | 下方「防護收尾」。 | 2 分 |
+
+第 3 拍現場：
+
+```bash
+picotool load -x -f poc/build/spi-tap/spi_tap.uf2
+python3 poc/host/live_mirror.py
+```
+
+喚醒評估板、切畫面，終端裡的 128×64 ASCII 螢幕就跟著重繪。節奏：先停在靜態畫面（鏡像定格），再開始切（觀眾意識到「它真的同步讀到了」）。
+
+分界原則：**實體、易出包的錄起來；軟體、決定性的現場跑。** 搭線（第 2 拍）預錄；第二螢幕（第 3 拍）優先現場並備一份錄影；第 4、5 拍是口頭＋投影片。
+
+fallback，由硬到軟：
+
+1. **現場鏡像不出畫面**（裝置睡著／接觸不良）→ 改放預錄鏡像錄影。
+2. **連預錄都放不出來** → 跑 `python3 poc/host/live_mirror.py --file <擷取檔>` 重播已擷取畫面。
+
+### 防護收尾
+
+攻擊面是**可及的明文顯示鏈**；防線有三層，擇一或疊加：
+
+1. **納入安全邊界**：控制器直驅顯示、走線不可及（無測試點／可拆接頭）。
+2. **顯示鏈加密 / MAC**：被動擷取只拿到密文。
+3. **物理防護 + 開殼偵測**：關鍵走線埋內層／灌膠／防拆網，碰線留痕或觸發；外殼⇄主板配對。
 
 <!-- answer: P-5 -->

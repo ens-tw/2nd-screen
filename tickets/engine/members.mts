@@ -1,4 +1,4 @@
-// Members: the parts of a ticket's done condition — the APIs of a datastore, the files of a list — that an
+// Members: the parts of a ticket's done condition — the APIs of a ledger, the files of a list — that an
 // extension done kind reports with its verdict (`met` → `members`), each met or not, an unmet one with
 // what holds it. A ticket with members is worked member by member: `next` offers its topmost workable
 // member, and the view and `show` summarise the rest by what holds them — generated from the data the

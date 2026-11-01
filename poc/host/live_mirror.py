@@ -9,29 +9,26 @@
 # wires is enough to watch what is on the display.
 # Pixel mirroring only; contains no content-interpretation logic.
 #
-# Compare: raster.py = single static reconstruction (from a file);
-#          this file = live streaming mirror.
-#          Both share the same vertical-column-packing reconstruction.
-#
 # Usage (run in your own terminal; the in-place redraw needs a real TTY):
 #   1) Flash spi_tap first (continuous DMA + binary streaming):
 #        picotool load -x -f poc/build/spi-tap/spi_tap.uf2
 #   2) python3 poc/host/live_mirror.py              # connect to the board, mirror live, Ctrl-C to quit
 #      python3 poc/host/live_mirror.py --page       # page-sequence mode (the default)
 #      python3 poc/host/live_mirror.py --raw        # latest 1024 bytes, explicitly unaligned
-#      python3 poc/host/live_mirror.py --file cap.txt  # no board, replay a capture file (for verification)
+#      python3 poc/host/live_mirror.py --file cap.bin  # no board, replay a capture file (for verification)
 #      python3 poc/host/live_mirror.py --seconds 20  # exit after a fixed time (static output when not a TTY)
-#      python3 poc/host/live_mirror.py --capture _output/pin-test.txt  # exact input + diagnostic events
-# Standard library only; autodetects STP2 binary packets and legacy hex captures.
+#      python3 poc/host/live_mirror.py --capture _output/pin-test.bin  # exact input + diagnostic events
+# Standard library only.
 import argparse
+from collections import deque
 from datetime import datetime, timezone
 import json
 import math
 import os
 from pathlib import Path
-import re
 import select
 import sys
+import termios
 import time
 import tty
 import uuid
@@ -39,13 +36,13 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from usb_probe import find_running_ports          # noqa: E402  (tool in the same directory)
 from raster import render_frame, FRAME, W, H       # noqa: E402
-from spi_stream import MAGIC, StreamParser        # noqa: E402
+from spi_stream import StreamParser        # noqa: E402
 
 RECENT = 4096          # enough for several complete page sequences
 PAGE_STRIDE = W + 1    # measured capture: one page opcode, then 128 pixel bytes
 PAGE_FRAME = (H // 8) * PAGE_STRIDE
 RENDER_INTERVAL = 1 / 30  # coalesce terminal updates without the old 6.7 Hz cap
-_HEX_RE = re.compile(rb'(?:[0-9a-fA-F]{2}){1,32}')
+RATE_WINDOW = 2.0  # long enough to smooth one frame per ~100 ms into a steady figure
 
 # ── Terminal control sequences (real TTY only) ──
 _ALT_ON, _ALT_OFF = "\x1b[?1049h", "\x1b[?1049l"
@@ -86,16 +83,6 @@ def make_frame(buf, use_page=True):
     return page_frame(buf) if use_page else latest_frame(buf)
 
 
-def feed_hex(line_bytes, acc):
-    """Accept only a whole firmware hex line (1..32 bytes); return bytes added."""
-    line = line_bytes.strip()
-    if not _HEX_RE.fullmatch(line):
-        return 0
-    data = bytes.fromhex(line.decode('ascii'))
-    acc.extend(data)
-    return len(data)
-
-
 def decode_refresh_prefix(prefix, bus_offset):
     """Recognize the observed control-prefix grammar, never arbitrary pixel bytes.
 
@@ -131,7 +118,7 @@ class CaptureLog:
         if path is None:
             stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
             path = (Path(__file__).resolve().parents[2] / '_output' / 'captures'
-                    / f'mirror-{stamp}-{uuid.uuid4().hex[:6]}.txt')
+                    / f'mirror-{stamp}-{uuid.uuid4().hex[:6]}.bin')
         self.path = Path(path)
         self.events_path = Path(str(self.path) + '.events.jsonl')
         if self.path.exists() or self.events_path.exists():
@@ -156,7 +143,7 @@ class CaptureLog:
         self.events.flush()
 
     def write(self, chunk):
-        # Save before parsing, including malformed text and partial serial lines.
+        # Save before parsing, including malformed and partial packets.
         offset = self.serial_bytes
         self.raw.write(chunk)
         self.raw.flush()
@@ -172,7 +159,7 @@ class CaptureLog:
 
 
 class MirrorDecoder:
-    """Keep complete frames across reads, but never assemble across dump gaps."""
+    """Keep complete frames across reads, but never assemble across stream gaps."""
 
     def __init__(self, use_page=True, diagnostics=None):
         self.use_page = use_page
@@ -211,15 +198,6 @@ class MirrorDecoder:
 
     def break_stream(self, reason):
         self.discard(len(self.pending), reason)
-
-    def feed_line(self, line):
-        data = bytearray()
-        if not feed_hex(line, data):
-            reason = 'dump-boundary' if not line.strip() else 'non-hex-line'
-            self.break_stream(reason)
-            self.event(reason, after_bus_offset=self.received, serial_line_hex=line.hex())
-            return
-        self.feed_bus(data)
 
     def feed_bus(self, data):
         # Binary USB chunks are contiguous across reads; only reported loss resets.
@@ -263,59 +241,16 @@ class MirrorDecoder:
             self.revision += 1
 
 
-class CaptureInput:
-    """Autodetect new binary streams and preserve legacy hex-file replay."""
-
-    def __init__(self, decoder):
-        self.decoder = decoder
-        self.mode = None
-        self.pending = bytearray()
-        self.stream = StreamParser(decoder.feed_bus, decoder.break_stream, decoder.diagnostics)
-
-    def feed(self, chunk):
-        if self.mode == 'binary':
-            self.stream.feed(chunk)
-            return
-        self.pending.extend(chunk)
-        if self.mode is None:
-            if MAGIC in self.pending or len(self.pending) > 4096:
-                self.mode = 'binary'
-                self.decoder.event('transport_detected', mode=self.mode)
-                self.stream.feed(self.pending)
-                self.pending.clear()
-                return
-            if b"\n" not in self.pending:
-                return
-            line = self.pending.partition(b"\n")[0]
-            try:
-                text = line.decode('utf-8')
-            except UnicodeDecodeError:
-                return
-            if not all(char.isprintable() or char in '\t\r' for char in text):
-                return
-            self.mode = 'legacy-hex'
-            self.decoder.event('transport_detected', mode=self.mode)
-        while b"\n" in self.pending:
-            line, _, self.pending = self.pending.partition(b"\n")
-            self.decoder.feed_line(line)
-
-    def finish(self, replay=False):
-        if self.mode == 'binary':
-            self.stream.finish()
-        elif self.pending:
-            if replay:
-                self.decoder.feed_line(self.pending)
-            else:
-                self.decoder.event('partial_serial_line', hex=self.pending.hex())
-            self.pending.clear()
+def make_stream(decoder):
+    return StreamParser(decoder.feed_bus, decoder.break_stream, decoder.diagnostics)
 
 
 def mode_label(use_page):
     return 'page-sequence B0..B7' if use_page else 'RAW UNALIGNED (latest 1024B)'
 
 
-def compression_label(reader):
-    stats = reader.stream.compression.summary()
+def compression_label(stream):
+    stats = stream.compression.summary()
     minimum = stats['min_saved_percent']
     values = (100.0 if minimum is None else minimum,
               stats['max_saved_percent'], stats['avg_saved_percent'])
@@ -323,9 +258,57 @@ def compression_label(reader):
     return f'compression saved% min/max/avg={numbers}'
 
 
-def live_status(frames, decoder, reader, use_page):
+class RateMeter:
+    """Bytes in the last window, on the serial link and on the display bus.
+
+    Rates divide by the full window, so the first window ramps up rather than
+    reporting a spike from one read divided by a tiny elapsed time.
+    """
+
+    def __init__(self, start, window=RATE_WINDOW):
+        self.start, self.now, self.window = start, start, window
+        self.samples = deque()
+        self.base_wire = self.base_bus = 0
+        self.wire = self.bus = 0
+        self.peak_wire = self.peak_bus = 0.0
+
+    def update(self, now, wire, bus):
+        self.now, self.wire, self.bus = now, wire, bus
+        self.samples.append((now, wire, bus))
+        while self.samples[0][0] <= now - self.window:
+            _, self.base_wire, self.base_bus = self.samples.popleft()
+        self.peak_wire = max(self.peak_wire, self.wire_Bps)
+        self.peak_bus = max(self.peak_bus, self.bus_Bps)
+
+    @property
+    def wire_Bps(self):
+        return (self.wire - self.base_wire) / self.window
+
+    @property
+    def bus_Bps(self):
+        return (self.bus - self.base_bus) / self.window
+
+    def summary(self):
+        elapsed = self.now - self.start
+        return dict(wire_bytes=self.wire, bus_bytes=self.bus,
+                    avg_wire_Bps=self.wire / elapsed if elapsed > 0 else None,
+                    avg_bus_Bps=self.bus / elapsed if elapsed > 0 else None,
+                    peak_wire_Bps=self.peak_wire, peak_bus_Bps=self.peak_bus)
+
+
+def rate_label(meter):
+    return (f'rate({meter.window:.0f}s) wire={meter.wire_Bps * 8 / 1000:.1f} kbit/s '
+            f'({meter.wire_Bps / 1000:.2f} kB/s)  bus={meter.bus_Bps * 8 / 1000:.1f} kbit/s')
+
+
+def live_status(frames, decoder, stream, meter, use_page):
     return (f'updates={frames}  received={decoder.received}B  '
-            f'{mode_label(use_page)}  (Ctrl-C to quit)\n{compression_label(reader)}')
+            f'{mode_label(use_page)}  (Ctrl-C to quit)\n{compression_label(stream)}\n{rate_label(meter)}')
+
+
+def waiting_status(stream, meter):
+    return (_HOME + 'Waiting for display update; wake the device or change screens.\x1b[K\n'
+            + compression_label(stream) + '\x1b[K\n' + rate_label(meter) + '\x1b[K\n')
 
 
 def box(art, status, color=True):
@@ -348,7 +331,9 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
     try:
         fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK | os.O_NOCTTY)
         if os.isatty(fd):
-            tty.setraw(fd)  # binary bytes must bypass echo, CR/LF conversion and IXON
+            # Binary bytes must bypass echo, CR/LF conversion and IXON. Do not flush:
+            # the board sends its session-start status as soon as the port opens.
+            tty.setraw(fd, termios.TCSANOW)
     except OSError as e:
         print(f"Cannot open {dev}: {e}")
         return 1
@@ -360,13 +345,13 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
         return 1
     report_capture(capture)
     decoder = MirrorDecoder(use_page, capture.event)
-    reader = CaptureInput(decoder)
+    stream = make_stream(decoder)
     deadline = (time.monotonic() + seconds) if seconds else None
     last_render, last_status, frames, rendered_revision = 0.0, 0.0, 0, -1
+    meter = RateMeter(time.monotonic())
+    wire_bytes = 0
     if terminal:
-        sys.stdout.write(_ALT_ON + _CUR_OFF + _HOME
-                         + 'Waiting for display update; wake the device or change screens.\x1b[K\n'
-                         + compression_label(reader) + '\x1b[K\n')
+        sys.stdout.write(_ALT_ON + _CUR_OFF + waiting_status(stream, meter))
         sys.stdout.flush()
     try:
         while deadline is None or time.monotonic() < deadline:
@@ -381,13 +366,15 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
                 if not chunk:
                     break
                 capture.write(chunk)
-                reader.feed(chunk)
+                stream.feed(chunk)
+                wire_bytes += len(chunk)
             now = time.monotonic()
+            meter.update(now, wire_bytes, decoder.received)
             if (now - last_render >= RENDER_INTERVAL and decoder.frame is not None
                     and decoder.revision != rendered_revision):
                 art = render_frame(decoder.frame)
                 frames += 1
-                status = live_status(frames, decoder, reader, use_page)
+                status = live_status(frames, decoder, stream, meter, use_page)
                 if terminal:
                     sys.stdout.write(_HOME + box(art, status, color=True))
                 else:
@@ -397,22 +384,26 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
                 last_render = now
                 last_status = now
                 rendered_revision = decoder.revision
-            elif terminal and decoder.frame is not None and now - last_status >= 0.25:
+            elif terminal and now - last_status >= 0.25:
                 # Update statistics even when pixel content stays unchanged,
                 # without redrawing the whole framebuffer or counting a render.
-                status = live_status(frames, decoder, reader, use_page)
-                sys.stdout.write(_STATUS_HOME + '\x1b[K' + status.replace('\n', '\n\x1b[K'))
+                if decoder.frame is None:
+                    sys.stdout.write(waiting_status(stream, meter))
+                else:
+                    status = live_status(frames, decoder, stream, meter, use_page)
+                    sys.stdout.write(_STATUS_HOME + '\x1b[K' + status.replace('\n', '\n\x1b[K'))
                 sys.stdout.flush()
                 last_status = now
     except KeyboardInterrupt:
         pass
     finally:
         try:
-            reader.finish()
+            stream.finish()
             decoder.finish()
         finally:
             try:
-                capture.event('compression_summary', **reader.stream.compression.summary())
+                capture.event('compression_summary', **stream.compression.summary())
+                capture.event('rate_summary', **meter.summary())
                 capture.close()
             finally:
                 os.close(fd)
@@ -431,26 +422,26 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
 def run_file(path, use_page=True, capture_path=None):
     capture = None
     decoder = MirrorDecoder(use_page)
-    reader = CaptureInput(decoder)
+    stream = make_stream(decoder)
     try:
         with open(path, 'rb') as source:
             capture = CaptureLog(capture_path, source='replay') if capture_path is not None else None
             decoder = MirrorDecoder(use_page, capture.event if capture is not None else None)
-            reader = CaptureInput(decoder)
+            stream = make_stream(decoder)
             while chunk := source.read(4096):
                 if capture is not None:
                     capture.write(chunk)
-                reader.feed(chunk)
+                stream.feed(chunk)
     except OSError as error:
         print(f"Cannot read {path}: {error}")
         return 1
     finally:
         try:
-            reader.finish(replay=True)
+            stream.finish()
             decoder.finish()
         finally:
             if capture is not None:
-                capture.event('compression_summary', **reader.stream.compression.summary())
+                capture.event('compression_summary', **stream.compression.summary())
                 capture.close()
                 report_capture(capture)
     if decoder.frame is None:
@@ -459,7 +450,7 @@ def run_file(path, use_page=True, capture_path=None):
               "--raw shows an unaligned diagnostic view.")
         return 1
     print(box(render_frame(decoder.frame),
-              f"{decoder.received}B  {mode_label(use_page)}  (file replay)\n{compression_label(reader)}",
+              f"{decoder.received}B  {mode_label(use_page)}  (file replay)\n{compression_label(stream)}",
               color=sys.stdout.isatty()))
     return 0
 
@@ -469,7 +460,7 @@ def main():
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--page', action='store_true', help='page-sequence mode (default)')
     modes.add_argument('--raw', action='store_true', help='latest 1024 bytes, without alignment')
-    parser.add_argument('--file', help='replay a saved hex capture')
+    parser.add_argument('--file', help='replay a saved capture')
     parser.add_argument('--capture', help='save exact serial input and .events.jsonl; live default: _output/captures/')
     parser.add_argument('--seconds', type=float, default=0, help='live duration; 0 means unlimited')
     args = parser.parse_args()
