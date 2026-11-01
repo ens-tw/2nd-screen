@@ -5,7 +5,7 @@
 
 ## 檔案
 
-- `spi_tap.pio` — PIO 擷取程式：CS 為 frame 邊界，CLK 邊緣取樣 DI，autopush 成位元組。
+- `spi_tap.pio` — PIO 擷取程式：每個 CS 脈衝在 CLK 邊緣取樣 DI 8 bit，autopush 成位元組。
 - `spi_tap.c` — SDK 初始化、PIO/DMA 設定、連續 DMA ring 擷取，bus 閒置 2 ms 就經 USB CDC 送一包（12 B 開銷的 `S3` 格式，可選逐包無損 RLE，每包獨立解碼）。USB product 為 `SPI Stream v3 Frame`；格式見 [`docs/2nd-screen.md`](../../docs/2nd-screen.md#連續串流韌體)。
 - `CMakeLists.txt` — 建置設定（板子預設 `adafruit_feather_rp2040`）。
 - `wiring.html` — 接線圖：Feather RP2040 探針腳位示意 ＋ 腳位對照表、安全護欄、燒錄／讀取指令。用 `qlmanage -p wiring.html` 或瀏覽器開啟。
@@ -41,7 +41,7 @@ ninja -C "$OUT" spi_tap
 
 ## 接線提醒
 
-- `spi_tap.c` 的 `PIN_DI / PIN_CLK / PIN_CS` ＝ **GP10 / GP11 / GP12**，對應 Feather 絲印 **D10 / D11 / D12**（三支相鄰純數位腳，無特殊功能、無板上上拉，適合被動搭線）。DI 與 CLK 必須相鄰。
+- `spi_tap.c` 的 `PIN_DI / PIN_CLK / PIN_CS` ＝ **GP10 / GP11 / GP12**，對應 Feather 絲印 **D10 / D11 / D12**（三支相鄰純數位腳，無特殊功能、無板上上拉，適合被動搭線）。DI、CLK、CS 必須是連號 GPIO。
   - ⚠ Feather 的「Dn」絲印 ≠ GPIO 編號（D4=GP6、D5=GP7、D6=GP8…）；且 **GP4 未接出**（＝USBBOOT），**GP2/GP3 是 SDA/SCL**（I2C/STEMMA，可能帶上拉，被動搭線避開）。依 Adafruit 原理圖校正。
 - 邏輯電壓須以實際高／低準位與晶片規格確認；本 PoC 的 CLK 1.8 V 是 DC 電表讀值，不能當作已確認的數位振幅。
 - 預設 SPI mode 0；實測極性不同就改 `.pio` 裡 `wait` 的邊緣。

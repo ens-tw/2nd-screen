@@ -24,7 +24,7 @@
 - `docs/2nd-screen.md`：主文件——量測與真機結果、接線、資料率模型、重建方法、即時第二螢幕、串流格式、demo 腳本。
 - `docs/bluefruit-ble.md`：BLE 開發資料（規格、吞吐量證據、實測計畫）；bridge 尚未實作。
 - `poc/rp2040-spi-tap/`：RP2040 被動擷取韌體。
-  - `spi_tap.c` / `.pio`：PIO 以 CS 為 frame 邊界、CLK 邊緣取樣 DI，連續 DMA ring 收進緩衝，bus 閒置 2 ms 就經 USB CDC 送一包（控制指令與 frame 同包）。封包格式與量測見主文件「連續串流韌體」。
+  - `spi_tap.c` / `.pio`：PIO 依每 byte 一個的 CS 脈衝、CLK 邊緣取樣 DI 8 bit，連續 DMA ring 收進緩衝，bus 閒置 2 ms 就經 USB CDC 送一包（控制指令與 frame 同包）。封包格式與量測見主文件「連續串流韌體」。
   - `bus_probe.c`：無示波器診斷——PWM 硬體計 CLK 上升緣，用真輸入門檻判斷「這條匯流排讀不讀得到」。
   - `CMakeLists.txt`、`wiring.html`、`ref/`（Feather 腳位定位圖）。
 - `poc/host/`：主機端工具（純標準庫）。

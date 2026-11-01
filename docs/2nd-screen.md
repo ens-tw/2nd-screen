@@ -41,29 +41,34 @@ flowchart LR
 |---|---|---|---|
 | DI（資料） | GP10 | D10 | IN base |
 | CLK（時脈） | GP11 | D11 | IN base + 1（必須與 DI 相鄰） |
-| CS（選擇） | GP12 | D12 | frame 邊界（低電位有效） |
+| CS（選擇） | GP12 | D12 | IN base + 2；byte 邊界（低電位有效） |
 | GND | GND | GND | 共地（唯一共用電源線） |
 
 > ⚠ Feather 的「Dn」絲印 ≠ GPIO 編號；GP4 未接出（USBBOOT），GP2/GP3 是 SDA/SCL（可能帶上拉，避開）。選 D10/D11/D12 三支相鄰純數位腳。評估板側的測試點依該板資料手冊／原理圖定位，接前用電表復驗（GND 導通、上電量各點對地電壓辨識訊號線）。
 
 ## 擷取端韌體（RP2040 PIO tap）
 
-RP2040 的 PIO：以 CS 為 frame 邊界、在 CLK 取樣邊緣讀 DI，湊成位元組推 FIFO，再 DMA 進緩衝，不占 CPU。
+RP2040 的 PIO：每個 CS 低電位脈衝取 8 bit、在 CLK 取樣邊緣讀 DI，湊成位元組推 FIFO，再 DMA 進緩衝，不占 CPU。
 
 ```
-; PIO 骨架（概念）：CS 低電位期間，於 CLK 上升緣取樣 DI
+; PIO 骨架（概念）：每個 CS 低電位脈衝，於 CLK 上升緣取樣 DI 8 bit
 .program spi_tap
-    wait 0 pin CS          ; 等 CS 拉低（frame 開始）
+    wait 0 pin CS          ; 等 CS 拉低（byte 開始）
+    mov  isr, null         ; 丟掉殘留 bit
+    set  x, 7
 sample:
     wait 1 pin CLK         ; 等時脈上升緣
     in   pins, 1           ; 取樣 DI 一個位元
     wait 0 pin CLK         ; 等時脈回落
-    jmp  sample
+    jmp  x--, sample
+    wait 1 pin CS          ; 等 CS 拉高，多餘的 CLK 緣不取樣
 ```
 
 `spi_tap.c` 把三支探針腳全設輸入、以 OEOVER/OD 硬體鎖成永不驅動（純被動），DMA 持續收進 32 KiB ring，USB CDC 以 binary 封包傳送（bus 閒置 2 ms 送一包，單包上限 2048 B）；擷取不因 USB 傳送停止。預設 SPI mode 0；實測極性不同就改 `.pio` 的 `wait` 邊緣。
 
-**[證實：Feather RP2040 自測]** 擷取鏈曾以晶片內 loopback 驗證：同一顆 RP2040 用 SIO 打已知 mode-0 波形，再用正式韌體同一支 `spi_tap.pio` 讀回，連續多 round 每 round 16384/16384 B 零不符。結論是 PIO 取樣（mode-0、CS 為 frame 邊界、MSB-first autopush）＋ DMA ＋ USB CDC 這條鏈正確。自測程式已移除，見 commit `de752ed`。
+**[證實：Feather RP2040 自測]** 擷取鏈曾以晶片內 loopback 驗證：同一顆 RP2040 用 SIO 打已知 mode-0 波形，再用當時的 `spi_tap.pio` 讀回，連續多 round 每 round 16384/16384 B 零不符。結論是當時的 PIO 取樣（mode-0、MSB-first autopush）＋ DMA ＋ USB CDC 這條鏈正確；現行逐 byte 版未重跑此自測，改以下面的真板結果為準。自測程式已移除，見 commit `de752ed`。
+
+**逐 byte 對齊 [證實：真板，`_output/bit-slip/`；觸發原因未確認]。** CS 每個 byte 拉高一次：探針計得 CS 上升緣約 10390 次／秒，與 bus bytes 幾乎 1:1（`csq.bin`，以 IRQ 計數，偶有數個差異）。舊 PIO 只在 CLK 回落瞬間看 CS，實際碰不到 CS 拉高，所以多一個 bit 後會一直錯位到重新上電，畫面停住但資料仍在流：`_output/captures/mirror-20261101T182817Z-fdc6d5.bin` 在第 15 包起全部右移 1 bit，後續兩次擷取也一樣。多出這個 bit 的實際原因未確認。現行 PIO 每個脈衝只取 8 bit 並清掉殘留。每 500 ms 注入 1 個多餘 bit（`pio_sm_exec`）20 秒：舊 PIO 每次注入都累積錯位（`ctrl_orig.bin`，該次為每 3 秒注入）；現行 PIO 193/193 包都對齊（`inj_new.bin`）。未注入跑 60 秒，578/578 包都對齊（`final.bin`）。注入只模擬 ISR 多 bit，不等於重現真實的觸發條件。
 
 <!-- answer: P-1 -->
 

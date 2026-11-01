@@ -44,7 +44,7 @@ python3 poc/host/live_mirror.py
 
 ## 運作原理
 
-- **韌體**（`spi_tap.c` + `.pio`）：PIO 以 CS 為 frame 邊界、在 CLK 邊緣取樣 DI、autopush 成位元組，DMA 持續寫入 32 KiB ring，經 USB CDC 以 binary 串流；不因 USB 傳送停止擷取，bus 閒置 2 ms 就送一包，控制指令與 frame 同包（約 9.6 fps 真板實測約 1.4 kB/s）。所有探針腳全程輸入、硬體鎖成永不驅動（純被動）。每包可選無損 RLE，詳見主文件。
+- **韌體**（`spi_tap.c` + `.pio`）：PIO 依每 byte 一個的 CS 脈衝、在 CLK 邊緣取樣 DI 8 bit、autopush 成位元組，DMA 持續寫入 32 KiB ring，經 USB CDC 以 binary 串流；不因 USB 傳送停止擷取，bus 閒置 2 ms 就送一包，控制指令與 frame 同包（約 9.6 fps 真板實測約 1.4 kB/s）。所有探針腳全程輸入、硬體鎖成永不驅動（純被動）。每包可選無損 RLE，詳見主文件。
 - **主機端**（`live_mirror.py`）：把位元組流當垂直欄像素打包（欄定址、每欄 8 垂直位元）重建 128×64 framebuffer，印成半格 ASCII——就是第二螢幕。
 - **診斷**（`bus_probe.c`）：無示波器時用 RP2040 的真輸入門檻硬體計 CLK 上升緣，直接回答「這條匯流排讀不讀得到」。
 

@@ -239,7 +239,7 @@
         <tbody>
           <tr><td class="pin"><span class="dot" style="background:var(--w-data)"></span>D1（DI）</td><td class="pin">GP10</td><td class="pin">D10</td><td>資料線</td></tr>
           <tr><td class="pin"><span class="dot" style="background:var(--w-clk)"></span>CLK</td><td class="pin">GP11</td><td class="pin">D11</td><td>時脈</td></tr>
-          <tr><td class="pin"><span class="dot" style="background:var(--w-cs)"></span>CS</td><td class="pin">GP12</td><td class="pin">D12</td><td>晶片選擇（frame 邊界）</td></tr>
+          <tr><td class="pin"><span class="dot" style="background:var(--w-cs)"></span>CS</td><td class="pin">GP12</td><td class="pin">D12</td><td>晶片選擇（byte 邊界）</td></tr>
           <tr><td class="pin"><span class="dot" style="background:var(--w-gnd)"></span>GND</td><td class="pin">GND</td><td class="pin">GND</td><td>共地（必接）</td></tr>
           <tr class="nc"><td class="pin">+5V vUSB</td><td colspan="2"><span class="tag-nc">不接 NC</span></td><td>探針由自身 USB 供電</td></tr>
           <tr class="nc"><td class="pin">ON</td><td colspan="2"><span class="tag-nc">不接 NC</span></td><td>用途未確認，不接</td></tr>
@@ -305,7 +305,7 @@
       <li>預期：畫面變動時才有 hex 突發（write-on-change）。沒資料 → 先檢查 <code>GND</code> 與電壓。</li>
       <li>出現穩定亂碼 → SPI 極性可能不同，改 <code>spi_tap.pio</code> 的 <code>wait</code> 邊緣（預設 mode 0）。</li>
       <li>腳位＝ <code>D10/D11/D12</code>（＝GP10/11/12）：純數位、無上拉，適合被動搭線。⚠ Feather 的 Dn 絲印 ≠ GPIO 編號，且 <code>GP4</code> 未接出（USBBOOT）、<code>GP2/GP3</code> 是 I2C（SDA/SCL），故都不用。依 Adafruit 原理圖。</li>
-      <li>想換腳位 → 改 <code>spi_tap.c</code> 的 <code>PIN_DI/PIN_CLK/PIN_CS</code>，但 DI 與 CLK 必須相鄰、且要選 Feather 有接出的腳。</li>
+      <li>想換腳位 → 改 <code>spi_tap.c</code> 的 <code>PIN_DI/PIN_CLK/PIN_CS</code>，但 DI、CLK、CS 必須是連號 GPIO、且要選 Feather 有接出的腳。</li>
       <li>要看畫面 → 跑 <code>python3 poc/host/live_mirror.py</code> 即時鏡像成第二螢幕。</li>
     </ul>
   </section>
