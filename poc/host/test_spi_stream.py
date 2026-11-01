@@ -9,7 +9,8 @@ import unittest
 import zlib
 
 from live_mirror import CaptureInput, MirrorDecoder
-from spi_stream import DATA, HEADER, MAGIC, SESSION_START, STATUS, StreamParser
+from spi_stream import (DATA, HEADER, MAGIC, SESSION_START, STATUS, RLE,
+                        StreamParser, rle_encode, rle_decode)
 from test_live_mirror import encode_frame, dump_lines
 
 
@@ -17,6 +18,10 @@ def packet(payload=b'', seq=0, offset=0, epoch=1, dropped=0, stalls=0, flags=0):
     body = HEADER.pack(MAGIC, DATA if payload else STATUS, flags, len(payload),
                        seq, 12345, offset, epoch, dropped, stalls) + payload
     return body + struct.pack('<I', zlib.crc32(body))
+
+
+def rle_packet(payload, **fields):
+    return packet(struct.pack('<H', len(payload)) + rle_encode(payload), flags=RLE, **fields)
 
 
 class StreamTests(unittest.TestCase):
@@ -105,6 +110,116 @@ class StreamTests(unittest.TestCase):
             reader.feed(wire[i:i + 17])
         self.assertEqual(reader.mode, 'legacy-hex')
         self.assertEqual(reader.decoder.frame, frame)
+
+    def test_rle_boundaries_and_every_byte_round_trip(self):
+        rng = random.Random(48)
+        for size in (1, 2, 3, 4, 5, 127, 128, 129, 130, 131, 255, 256):
+            for data in (b'\x00' * size, b'\xff' * size, rng.randbytes(size),
+                         bytes(range(256))[:size], (b'aaabbbcc' * 32)[:size]):
+                with self.subTest(size=size, data=data[:8]):
+                    self.assertEqual(rle_decode(struct.pack('<H', len(data)) + rle_encode(data)), data)
+
+    def test_mixed_raw_rle_and_status_use_original_byte_offsets(self):
+        parser = self.make_parser()
+        wire = (rle_packet(b'\x00' * 256, seq=0, offset=0)
+                + packet(b'raw STP2 data', seq=1, offset=256)
+                + packet(seq=2, offset=269)
+                + rle_packet(b'\xff' * 256, seq=3, offset=269))
+        for i in range(0, len(wire), 7):
+            parser.feed(wire[i:i + 7])
+        self.assertEqual(self.data, [b'\x00' * 256, b'raw STP2 data', b'\xff' * 256])
+        self.assertEqual(self.gaps, [])
+        self.assertEqual(parser.expected_offset, 525)
+        records = [f for kind, f in self.events if kind == 'stream_packet']
+        self.assertEqual(records[0]['payload_length'], 256)
+        self.assertEqual(records[0]['wire_payload_length'], 6)
+        self.assertTrue(records[0]['compressed'])
+
+    def test_invalid_rle_is_bounded_and_next_packet_is_independent(self):
+        malformed = [b'\x00\x00\x80x', b'\x01\x01\x80x', b'\x03\x00\x80',
+                     b'\x04\x00\x03x', b'\x02\x00\x80x', b'\x04\x00\x80x',
+                     b'\x01\x00\x00x\x00y']
+        for payload in malformed:
+            with self.subTest(payload=payload):
+                parser = self.make_parser()
+                parser.feed(packet(payload, flags=RLE)
+                            + rle_packet(b'\xff' * 256, seq=1, offset=256))
+                self.assertEqual(self.data, [b'\xff' * 256])
+                self.assertTrue(any(k == 'transport_bad_compression' for k, _ in self.events))
+                self.assertEqual(self.gaps, ['transport-resync'])
+
+    def test_rle_wire_crc_failure_does_not_poison_next_packet(self):
+        parser = self.make_parser()
+        damaged = bytearray(rle_packet(b'\x00' * 256))
+        damaged[-1] ^= 1
+        parser.feed(damaged + rle_packet(b'\xff' * 256, seq=1, offset=256))
+        self.assertEqual(self.data, [b'\xff' * 256])
+        self.assertTrue(any(k == 'transport_bad_crc' for k, _ in self.events))
+
+    def test_rle_sequence_gap_discards_partial_frame_and_recovers(self):
+        pixels = b'\x00' * 1024
+        bus = encode_frame(pixels)
+        decoder = MirrorDecoder()
+        reader = CaptureInput(decoder)
+        reader.feed(rle_packet(bus[:256], seq=0, offset=0))
+        reader.feed(rle_packet(bus[256:512], seq=2, offset=256))
+        self.assertIsNone(decoder.frame)
+        reader.feed(packet(seq=3, offset=512))
+        seq, offset = 4, 512
+        for i in range(0, len(bus), 128):
+            chunk = bus[i:i + 128]
+            reader.feed(rle_packet(chunk, seq=seq, offset=offset))
+            seq += 1
+            offset += len(chunk)
+        self.assertEqual(decoder.frame, pixels)
+
+    @unittest.skipUnless(shutil.which('cc'), 'native C compiler required')
+    def test_c_rle_packets_match_reference_and_never_expand(self):
+        source = r'''
+#include <stdio.h>
+#include "stream_protocol.h"
+int main(void) {
+    uint8_t input[258], out[TAP_PACKET_SIZE];
+    uint32_t sequence = 0, offset = 0;
+    while (fread(input, 1, 2, stdin) == 2) {
+        uint16_t n = (uint16_t)(input[0] | input[1] << 8);
+        if (n > 256 || fread(input, 1, n, stdin) != n) return 2;
+        size_t used = tap_packet_auto(out, n ? TAP_DATA : TAP_STATUS, 0,
+                                      input, n, sequence++, 12345, offset, 1, 0, 0);
+        if (!used || used > n + TAP_HEADER_SIZE + 4 || fwrite(out, 1, used, stdout) != used) return 3;
+        offset += n;
+    }
+    return 0;
+}
+'''
+        rng = random.Random(2026)
+        cases = [b'', bytes(range(256)), b'\x00' * 256, b'\xff' * 256]
+        for size in range(1, 257):
+            cases.extend((rng.randbytes(size), b'x' * size,
+                          bytes(rng.choice((0, 0, 0, 255, 48)) for _ in range(size))))
+        include = Path(__file__).resolve().parents[1] / 'rp2040-spi-tap'
+        with tempfile.TemporaryDirectory() as directory:
+            cfile, exe = Path(directory) / 'rle.c', Path(directory) / 'rle'
+            cfile.write_text(source)
+            subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                            '-I', str(include), str(cfile), '-o', str(exe)],
+                           check=True, capture_output=True)
+            wire = subprocess.run([str(exe)], input=b''.join(struct.pack('<H', len(d)) + d for d in cases),
+                                  check=True, capture_output=True).stdout
+        expected = bytearray()
+        offset = 0
+        for seq, data in enumerate(cases):
+            compressed = struct.pack('<H', len(data)) + rle_encode(data)
+            use_rle = len(compressed) < len(data)
+            expected.extend(packet(compressed if use_rle else data, flags=RLE if use_rle else 0,
+                                   seq=seq, offset=offset))
+            offset += len(data)
+        self.assertEqual(wire, expected)
+        parser = self.make_parser()
+        for i in range(0, len(wire), 113):
+            parser.feed(wire[i:i + 113])
+        self.assertEqual(b''.join(self.data), b''.join(cases))
+        self.assertEqual(self.gaps, [])
 
     @unittest.skipUnless(shutil.which('cc'), 'native C compiler required')
     def test_firmware_c_encoder_matches_python_parser(self):

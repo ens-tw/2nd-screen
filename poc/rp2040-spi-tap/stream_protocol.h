@@ -10,6 +10,7 @@
 #define TAP_DATA 1u
 #define TAP_STATUS 2u
 #define TAP_SESSION_START 1u
+#define TAP_RLE 2u
 
 static inline void tap_put_u32(uint8_t *out, uint32_t value) {
     for (unsigned i = 0; i < 4; ++i) out[i] = (uint8_t)(value >> (8u * i));
@@ -43,5 +44,58 @@ static inline size_t tap_packet(uint8_t *out, uint8_t type, uint8_t flags,
     size_t body = TAP_HEADER_SIZE + length;
     tap_put_u32(out + body, tap_crc32(out, body));
     return body + 4u;
+}
+
+// Byte-run coding: 0..127 = tag+1 literal bytes; 128..255 = repeat the
+// following byte (tag & 127)+3 times. No dictionary or previous-packet state.
+// Return 0 if the result does not fit. Input/output must not overlap.
+static inline size_t tap_rle_encode(uint8_t *out, size_t capacity,
+                                    const uint8_t *data, size_t length) {
+    size_t used = 0, i = 0;
+    while (i < length) {
+        size_t run = 1;
+        while (i + run < length && data[i + run] == data[i] && run < 130) run++;
+        if (run >= 3) {
+            if (capacity - used < 2) return 0;
+            out[used++] = (uint8_t)(128 + run - 3);
+            out[used++] = data[i];
+            i += run;
+        } else {
+            size_t start = i;
+            i += run;
+            while (i < length && i - start < 128) {
+                if (i + 2 < length && data[i] == data[i + 1] && data[i] == data[i + 2]) break;
+                i++;
+            }
+            size_t count = i - start;
+            if (capacity - used < count + 1) return 0;
+            out[used++] = (uint8_t)(count - 1);
+            for (size_t j = start; j < i; ++j) out[used++] = data[j];
+        }
+    }
+    return used;
+}
+
+// Encode directly into the existing packet buffer, with no extra scratch RAM.
+// RLE payload = uint16 original length + runs; use raw if that is not smaller.
+// Header length counts wire bytes. Offset always counts ORIGINAL bus bytes.
+static inline size_t tap_packet_auto(uint8_t *out, uint8_t type, uint8_t flags,
+                                     const uint8_t *payload, uint16_t length,
+                                     uint32_t sequence, uint32_t timestamp_us,
+                                     uint32_t offset, uint32_t epoch,
+                                     uint32_t dropped, uint32_t stalls) {
+    if (length > TAP_MAX_PAYLOAD) return 0;
+    if (type == TAP_DATA && length > 4) {
+        uint8_t *encoded = out + TAP_HEADER_SIZE;
+        size_t size = tap_rle_encode(encoded + 2, TAP_MAX_PAYLOAD - 2, payload, length);
+        if (size && size + 2 < length) {
+            encoded[0] = (uint8_t)length;
+            encoded[1] = (uint8_t)(length >> 8);
+            return tap_packet(out, type, flags | TAP_RLE, encoded, (uint16_t)(size + 2),
+                              sequence, timestamp_us, offset, epoch, dropped, stalls);
+        }
+    }
+    return tap_packet(out, type, flags, payload, length,
+                      sequence, timestamp_us, offset, epoch, dropped, stalls);
 }
 #endif

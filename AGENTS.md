@@ -24,6 +24,7 @@
 - `docs/2nd-screen.md`：主文件——量測與真機結果、接線、資料率模型、重建方法、即時第二螢幕、demo 腳本。
 - `poc/rp2040-spi-tap/`：RP2040 被動擷取韌體。
   - `spi_tap.c` / `.pio`：PIO 以 CS 為 frame 邊界、CLK 邊緣取樣 DI，連續 DMA ring 收進緩衝、USB CDC 以 STP2 binary 串流（有 CRC／序號／loss epoch）。
+  - `spi_tap_rle`：同一份被動韌體的可選逐包壓縮建置，STP2 flag bit1 表示 RLE、packet offset 仍按原 bus bytes 計；保持原 `spi_tap` raw build。新 host 支援兩者；舊 Python process 須重啟才能載入 RLE decoder。
   - `bus_probe.c`：無示波器診斷——PWM 硬體計 CLK 上升緣，用真輸入門檻判斷「這條匯流排讀不讀得到」。
   - `display_write_test.c`：獨立的主動單次回寫韌體，USB 收完整且 CRC 正確的 frame 才啟用輸出，完成後回到輸入；硬體前提與操作見 `poc/rp2040-spi-tap/display-write-test.md`，不可直接套用被動並接線路。
   - `loopback_test.c`：on-chip 自測（同板自驅自讀），驗證擷取鏈；不可在接著目標板時燒（它會驅動腳位）。
@@ -33,6 +34,7 @@
   - `raster.py`：單張靜態檢視（把一個擷取檔重建成一張畫面）。
   - `usb_probe.py`：找 RP2040、回報 BOOTSEL／RUNNING／ABSENT、`--read` 讀韌體輸出。
   - `make_test_frame.py` / `send_frame.py`：本機字型產圖（需 ImageMagick）／手動送一張 frame 至專用 `display_write_test`；送圖不會自動燒錄，也不做自動重試。
+  - `benchmark_compression.py`：離線 STP2 壓縮量測、bus hash／frame 事件比對，可另存不覆寫的壓縮重播檔；不開硬體裝置。
 - `poc/lima/pico.yaml`：RP2040 工具鏈 VM（替代方案；本機已可直接 host build，見 README）。
 
 ## Conventions

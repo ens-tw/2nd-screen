@@ -15,38 +15,50 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
-add_executable(spi_tap
-    spi_tap.c
-    ${PICO_SDK_PATH}/src/rp2_common/pico_stdio_usb/stdio_usb_descriptors.c
-)
-target_include_directories(spi_tap PRIVATE ${CMAKE_CURRENT_LIST_DIR})
-target_compile_definitions(spi_tap PRIVATE
-    USBD_PRODUCT="SPI Tap Stream v2"
-    PICO_STDIO_USB_USE_DEFAULT_DESCRIPTORS=1
-    PICO_ENABLE_USB_RESET_VIA_VENDOR_INTERFACE=1
-    PICO_USB_RESET_INCLUDE_DEFAULT_APP_DRIVER_CB=1
-    PICO_USB_RESET_SUPPORT_MS_OS_20_DESCRIPTOR=1
-    PICO_USB_RESET_MS_OS_20_DESCRIPTOR_ITF=2
-)
+# Keep the original raw target available; RLE is a separate passive build.
+foreach(tap_target IN ITEMS spi_tap spi_tap_rle)
+    if(tap_target STREQUAL "spi_tap_rle")
+        set(tap_product "SPI Tap Stream v2 RLE")
+    else()
+        set(tap_product "SPI Tap Stream v2")
+    endif()
+    add_executable(${tap_target}
+        spi_tap.c
+        ${PICO_SDK_PATH}/src/rp2_common/pico_stdio_usb/stdio_usb_descriptors.c
+    )
+    target_include_directories(${tap_target} PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+    target_compile_definitions(${tap_target} PRIVATE
+        USBD_PRODUCT="${tap_product}"
+        PICO_STDIO_USB_USE_DEFAULT_DESCRIPTORS=1
+        PICO_ENABLE_USB_RESET_VIA_VENDOR_INTERFACE=1
+        PICO_USB_RESET_INCLUDE_DEFAULT_APP_DRIVER_CB=1
+        PICO_USB_RESET_SUPPORT_MS_OS_20_DESCRIPTOR=1
+        PICO_USB_RESET_MS_OS_20_DESCRIPTOR_ITF=2
+    )
 
-# PIO 程式在建置時組譯成標頭
-pico_generate_pio_header(spi_tap ${CMAKE_CURRENT_LIST_DIR}/spi_tap.pio)
+    # PIO 程式在建置時組譯成標頭
+    pico_generate_pio_header(${tap_target} ${CMAKE_CURRENT_LIST_DIR}/spi_tap.pio)
 
-target_link_libraries(spi_tap
-    pico_stdlib
-    hardware_pio
-    hardware_dma
-    tinyusb_device
-    pico_stdio_usb_headers
-    pico_usb_reset
-    pico_unique_id
-)
+    target_link_libraries(${tap_target}
+        pico_stdlib
+        hardware_pio
+        hardware_dma
+        tinyusb_device
+        pico_stdio_usb_headers
+        pico_usb_reset
+        pico_unique_id
+    )
 
-# 透過 USB CDC 把擷取結果倒回主機；不用 UART。
-pico_enable_stdio_usb(spi_tap 0)
-pico_enable_stdio_uart(spi_tap 0)
+    # 透過 USB CDC 把擷取結果倒回主機；不用 UART。
+    pico_enable_stdio_usb(${tap_target} 0)
+    pico_enable_stdio_uart(${tap_target} 0)
 
-pico_add_extra_outputs(spi_tap)
+    pico_add_extra_outputs(${tap_target})
+
+    if(tap_target STREQUAL "spi_tap_rle")
+        target_compile_definitions(${tap_target} PRIVATE TAP_ENABLE_RLE=1)
+    endif()
+endforeach()
 
 # ── 擷取鏈自測：on-chip loopback（P-1）────────────────────────────────────
 # 同板用 SIO 驅動 GP2/3/4 的已知 SPI 波形，再用同一支 spi_tap.pio 讀回比對。

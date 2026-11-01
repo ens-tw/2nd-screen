@@ -7,6 +7,7 @@
 
 - `spi_tap.pio` — PIO 擷取程式：CS 為 frame 邊界，CLK 邊緣取樣 DI，autopush 成位元組。
 - `spi_tap.c` — SDK 初始化、PIO/DMA 設定、連續 DMA ring 擷取，以 STP2 binary 封包經 USB CDC 串流。
+- `spi_tap_rle` 建置 — 同一份被動韌體加逐包無損 byte-run 壓縮，無跨包狀態，不划算就送 raw。45 秒真擷取離線驗證約 12.14 → 3.53 kB/s；需新版 host 並重新啟動 Python process。啟用／格式見 [`docs/2nd-screen.md`](../../docs/2nd-screen.md#可選的逐包無損壓縮spi_tap_rle)；目前僅建置，尚未燒錄。
 - [`display-write-test.md`](display-write-test.md) / `display_write_test.c` — 未驗證介面的 4-wire 回寫 bench 範例，假設獨立 D/C 在 GP9；目前已知接點未確認 D/C，使用者送圖回報 DONE 但 OLED 未變，已還原被動 `spi_tap`。不可直接套用現有並接接線，也不可猜 ON 為 D/C；須先確認 framing、電壓與控制權。
 - `CMakeLists.txt` — 建置設定（板子預設 `adafruit_feather_rp2040`）。
 - `wiring.html` — 接線圖：Feather RP2040 探針腳位示意 ＋ 腳位對照表、安全護欄、燒錄／讀取指令。用 `qlmanage -p wiring.html` 或瀏覽器開啟。

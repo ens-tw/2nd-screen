@@ -174,11 +174,61 @@ python3 poc/host/live_mirror.py --file _output/pin-cursor-01.txt \
 - `stall_events` 計數 PIO RXSTALL sticky flag 的觀察次數；不是精確漏 bit／byte 數。若發生 stall，像素／位元組對齊亦可能失效，不能僅靠清 counter 宣稱已恢復。
 - 新讀取 session、sequence／offset 不連續、epoch／drop／stall counter 改變或 CRC resync，才中斷主機組幀；USB 封包邊界不會中斷組幀。
 
-線上格式為 32 B little-endian header：`<4sBBHIIIIII`，依序為 `STP2`、type（1=data、2=status）、flags（bit0=session start）、payload 長度、packet sequence、device timestamp（us）、device byte offset、loss epoch、dropped total、stall events；後接 payload，再接 4 B IEEE CRC32（header+payload）。32-bit counters／時間會回繞，序號與 offset 以模 2³² 檢查。device offset 含已知 ring 丟棄 bytes；診斷裡的 host `bus_offset` 則只計已交付解碼的 bytes，兩者須區分。
+線上格式為 32 B little-endian header：`<4sBBHIIIIII`，依序為 `STP2`、type（1=data、2=status）、flags（bit0=session start、bit1=packet RLE）、線上 payload 長度、packet sequence、device timestamp（us）、device byte offset、loss epoch、dropped total、stall events；後接 payload，再接 4 B IEEE CRC32（header+線上 payload）。32-bit counters／時間會回繞，序號與 offset 以模 2³² 檢查。device offset 含已知 ring 丟棄 bytes，且總是按解壓後的原匯流排 byte 數計算；診斷裡的 host `bus_offset` 則只計已交付解碼的 bytes，兩者須區分。
 
 `live_mirror.py` 自動辨識 STP2 或舊版 hex。新 `.bin`／`.txt` capture 都是逐 byte 原始存檔，副檔名不決定格式；terminal ASCII 僅是顯示層。`usb_probe.py --read` 對新版輸出可讀 hex／status，**不是**原始 binary 存檔方式。`raster.py` 仍只讀 hex，binary 重播請用 `live_mirror.py --file <capture>`。
 
 **[證實：Feather RP2040 燒錄與 45 秒實測]** `picotool load -v -x -f` 完成燒錄、逐 byte 驗證及重開，USB product 為 `SPI Tap Stream v2`。本機 `_output/screen1/stream-v2-bench-01.bin` 共 546,447 B 原始 serial 資料，解出 2,710 包、448,849 B 匯流排 payload、432 個完整畫面，終端亦實際重繪 432 次（本次約 9.6 fps）。期間無 CRC／header 錯誤、`dropped_total` 增量 0、`stall_events` 增量 0、loss epoch 固定；開始讀取時有一次途中接入的 transport resync。device offset 跨過多次 32 KiB ring 邊界而保持連續，亦收到 1 B 短尾封包。以每 113 B 重新切割原始檔重播，payload 與 framebuffer 重建一致；統計存於 `stream-v2-validation-01.json`。這是此樣本的量測，不代表任意 SPI 負載均不會 overflow，也尚未獨立確認兩種按鍵情境。
+
+### 可選的逐包無損壓縮（`spi_tap_rle`）
+
+**[證實：程式與離線驗證]** 新增獨立的被動建置 `spi_tap_rle.uf2`，USB product 為 `SPI Tap Stream v2 RLE`。每包仍處理最多 256 B 原匯流排資料，不組 frame、不等待下一個畫面，也不丟棄命令或未知 bytes。原 `spi_tap.uf2` 保留未壓縮格式。PIO、DMA、短尾 flush 與輸入防驅動鎖不變。
+
+壓縮僅使用 byte-run coding：
+
+- flags bit1 (`0x02`) 表示 RLE，僅用於 data 包；status 保持未壓縮。
+- RLE payload 前 2 B 是 little-endian 原始長度（1..256），後接 runs。
+- tag `0..127`：後接 `tag+1` 個 literal bytes。
+- tag `128..255`：後接一個 byte，重複 `(tag & 127)+3` 次（3..130）。
+- 包含 2 B 原始長度後仍小於 raw payload 才壓縮，否則送 raw；無法壓縮的內容不膨脹。header 與 CRC 長度不變。
+- CRC 先檢查線上 bytes，再做有長度上限的解壓；格式／CRC 壞包會中斷組幀。各包獨立，無上一包字典或上一張 framebuffer 依賴。序號／offset／epoch／drop／stall 的連續性規則保留。
+- host `stream_packet.payload_length` 為解壓後的原長度，`wire_payload_length` 為線上長度，`compressed` 標記有無 RLE。原始 capture 仍保存線上 bytes，解壓發生於匯流排解碼之前。
+
+**[證實：相同封包切法的離線重編碼]** 包含全部 STP2 header／CRC，以下只計有效封包；第一份來源前方 38 B 非封包資料不計入基準：
+
+| 來源 | 原封包總量 | RLE 封包總量 | 減少 | 依原擷取時長換算 |
+|---|---:|---:|---:|---|
+| 45.026 秒、432 frame | 546,409 B | 159,140 B | 70.88% | 12.14 → 3.53 kB/s |
+| 55.318 秒、217 frame | 279,067 B | 96,970 B | 65.25% | 5.04 → 1.75 kB/s |
+
+兩份解壓後匯流排 SHA-256、frame offset／changed 事件及最終 framebuffer 均相同。較低資料率來自第二份畫面更新較少，不代表壓縮能固定達到某個 rate。原始 45 秒樣本逐包 DEFLATE level 1（同樣加 2 B 長度、不划算則 raw）為 178,382 B，比 RLE 的 159,140 B 大；frame-only XOR+RLE 在該樣本也沒有優於直接 RLE，且不保留全部匯流排 bytes，因此本次採無跨包依賴的 RLE。
+
+**[證實：建置與 host 驗證]** 原生 C／Python encoder 逐 byte 一致，覆蓋 772 組 raw／重複／混合資料；測試涵蓋截斷、過長解壓、CRC／sequence gap 與 raw/RLE 混合串流。兩份真擷取重播無損。Feather Release ELF 的 flash code 由 26,052 B 增至 26,732 B（+680 B），static BSS 都是 37,000 B；encoder 直接使用既有 packet buffer，沒有額外壓縮 scratch buffer。
+
+**[推測／待實測：CPU 與 BLE]** 編碼為單次線性掃描、每包最多 256 B；約 10 kB/s 的來源流量下，預期 RP2040 可負擔，PIO／DMA 在壓縮期間仍持續收資料。此處尚未在真板量測新增 CPU 時間或壓縮模式的 drop／stall；離線 3.53 kB/s 也不是 Bluefruit 的實測吞吐量，且仍超過 9600 baud 8N1 的 960 B/s 上限。UART／BLE bridge 仍待實作與量測。
+
+重現離線驗證（純 Python 標準庫）：
+
+```bash
+python3 poc/host/benchmark_compression.py _output/screen1/stream-v2-bench-01.bin \
+  --seconds 45.025662 --out _output/compression/replay-rle.bin
+python3 poc/host/live_mirror.py --file _output/compression/replay-rle.bin
+```
+
+`--out` 不覆寫既有檔。benchmark 會比對原始／解壓 bus hash、frame 事件與最終 framebuffer，輸出 JSON；本次結果在 `_output/compression/bench-rle-validation.json` 與 `known-commands-rle-validation.json`。
+
+啟用需先停止正在讀 serial 的舊 host process；更新程式後重新執行 Python 才會載入新 decoder。舊 decoder 不認得 RLE flag，不能接壓縮韌體：
+
+```bash
+export PICO_SDK_PATH=$HOME/pico-sdk
+cmake -S poc/rp2040-spi-tap -B poc/build/spi-tap -G Ninja -DPICO_BOARD=adafruit_feather_rp2040
+ninja -C poc/build/spi-tap spi_tap_rle
+# 先 Ctrl-C 停止目前 live_mirror，再燒錄；兩種韌體都保持被動輸入。
+picotool load -v -x -f poc/build/spi-tap/spi_tap_rle.uf2
+python3 poc/host/live_mirror.py
+```
+
+本次僅建置／離線驗證，未中斷目前使用者執行中的 live capture，也未燒錄 RLE build。需還原時燒錄原 `spi_tap.uf2`；新版 host 同時支援 raw 與 RLE。
 
 ### 用照片建立像素參考，再核對 SPI 起點
 

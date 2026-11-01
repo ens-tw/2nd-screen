@@ -10,7 +10,61 @@ MAGIC = b'STP2'
 HEADER = struct.Struct('<4sBBHIIIIII')
 MAX_PAYLOAD = 256
 DATA, STATUS, SESSION_START = 1, 2, 1
+RLE = 2
 MASK32 = 0xffffffff
+
+
+def rle_encode(data):
+    """Reference encoder for offline measurements and firmware interoperability."""
+    out = bytearray()
+    i = 0
+    while i < len(data):
+        run = 1
+        while i + run < len(data) and data[i + run] == data[i] and run < 130:
+            run += 1
+        if run >= 3:
+            out.extend((128 + run - 3, data[i]))
+            i += run
+        else:
+            start = i
+            i += run
+            while i < len(data) and i - start < 128:
+                if i + 2 < len(data) and data[i] == data[i + 1] == data[i + 2]:
+                    break
+                i += 1
+            out.append(i - start - 1)
+            out.extend(data[start:i])
+    return bytes(out)
+
+
+def rle_decode(payload):
+    """Decode one RLE payload, bounded by the original 256-byte packet limit."""
+    if len(payload) < 4:
+        raise ValueError('RLE payload too short')
+    expected = int.from_bytes(payload[:2], 'little')
+    if not 1 <= expected <= MAX_PAYLOAD:
+        raise ValueError('Invalid RLE original length')
+    out = bytearray()
+    i = 2
+    while i < len(payload):
+        tag = payload[i]
+        i += 1
+        count = tag + 1 if tag < 128 else (tag & 127) + 3
+        if len(out) + count > expected:
+            raise ValueError('RLE output exceeds original length')
+        if tag < 128:
+            if i + count > len(payload):
+                raise ValueError('Truncated RLE literal')
+            out.extend(payload[i:i + count])
+            i += count
+        else:
+            if i >= len(payload):
+                raise ValueError('Truncated RLE repeat')
+            out.extend(bytes([payload[i]]) * count)
+            i += 1
+    if len(out) != expected:
+        raise ValueError('RLE length mismatch')
+    return bytes(out)
 
 
 class StreamParser:
@@ -45,8 +99,8 @@ class StreamParser:
             if len(self.pending) < HEADER.size:
                 return
             magic, kind, flags, length, seq, stamp, offset, epoch, dropped, stalls = HEADER.unpack_from(self.pending)
-            if (kind not in (DATA, STATUS) or flags & ~SESSION_START or length > MAX_PAYLOAD
-                    or (kind == STATUS and length) or (kind == DATA and not length)):
+            if (kind not in (DATA, STATUS) or flags & ~(SESSION_START | RLE) or length > MAX_PAYLOAD
+                    or (kind == STATUS and (length or flags & RLE)) or (kind == DATA and not length)):
                 self.event('transport_bad_header', hex=self.pending[:HEADER.size].hex())
                 del self.pending[:1]
                 self.resync = True
@@ -63,6 +117,13 @@ class StreamParser:
                 continue
             payload = bytes(self.pending[HEADER.size:HEADER.size + length])
             del self.pending[:total]
+            if flags & RLE:
+                try:
+                    payload = rle_decode(payload)
+                except ValueError as error:
+                    self.event('transport_bad_compression', sequence=seq, reason=str(error))
+                    self.resync = True
+                    continue
             fields = dict(packet_type=kind, flags=flags, sequence=seq, device_us=stamp,
                           device_offset=offset, loss_epoch=epoch,
                           dropped_total=dropped, stall_events=stalls)
@@ -86,11 +147,12 @@ class StreamParser:
                 reason = ','.join(reasons)
                 self.event('stream_gap', reason=reason, **fields)
                 self.on_gap(reason)
-            self.event('stream_packet', payload_length=length, **fields)
+            self.event('stream_packet', payload_length=len(payload), wire_payload_length=length,
+                       compressed=bool(flags & RLE), **fields)
             if kind == DATA:
                 self.on_data(payload)
             self.previous = fields
-            self.expected_offset = (offset + length) & MASK32
+            self.expected_offset = (offset + len(payload)) & MASK32
             self.resync = False
 
     def finish(self):

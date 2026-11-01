@@ -20,6 +20,10 @@
 #define FLUSH_US 1000u
 #define HEARTBEAT_US 250000u
 
+#ifndef TAP_ENABLE_RLE
+#define TAP_ENABLE_RLE 0
+#endif
+
 static uint8_t ring[RING_SIZE] __attribute__((aligned(RING_SIZE)));
 static const uint32_t reload_count = RING_SIZE;
 static volatile uint32_t completed_rings;
@@ -169,7 +173,11 @@ int main(void) {
             // DMA keeps running during the copy. Reject a copy overtaken by DMA.
             head = producer_position(head);
             if (head - tail > RING_SIZE - TAP_MAX_PAYLOAD) continue;
+#if TAP_ENABLE_RLE
+            tx_length = tap_packet_auto(packet, count ? TAP_DATA : TAP_STATUS,
+#else
             tx_length = tap_packet(packet, count ? TAP_DATA : TAP_STATUS,
+#endif
                                    session_start ? TAP_SESSION_START : 0,
                                    payload, count, sequence++, now, offset, epoch, dropped, stalls);
             tx_sent = 0;
