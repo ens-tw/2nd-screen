@@ -143,10 +143,23 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(stats['data_packets'], 2)
         self.assertEqual(stats['original_packet_bytes'], 37 + 292)
         self.assertEqual(stats['wire_packet_bytes'], 37 + 42)
-        self.assertEqual(stats['min_saved_percent'], 0)
+        self.assertAlmostEqual(stats['min_saved_percent'], 100 * (1 - 42 / 292))
         self.assertAlmostEqual(stats['max_saved_percent'], 100 * (1 - 42 / 292))
         self.assertAlmostEqual(stats['avg_saved_percent'], 100 * (1 - 79 / 329))
         self.assertNotAlmostEqual(stats['avg_saved_percent'], stats['max_saved_percent'] / 2)
+
+    def test_min_max_skip_small_packets_at_threshold_but_avg_counts_them(self):
+        parser = self.make_parser()
+        small = packet(b'\x00' * 127, seq=0)
+        at_limit = rle_packet(b'\x00' * 128, seq=1, offset=127)
+        parser.feed(small + at_limit)
+        stats = parser.compression.summary()
+        saved = 100 * (1 - len(at_limit) / (36 + 128))
+        self.assertAlmostEqual(stats['min_saved_percent'], saved)
+        self.assertAlmostEqual(stats['max_saved_percent'], saved)
+        self.assertEqual(stats['data_packets'], 2)
+        self.assertEqual(stats['original_packet_bytes'], (36 + 127) + (36 + 128))
+        self.assertEqual(stats['wire_packet_bytes'], len(small) + len(at_limit))
 
     def test_bad_packets_do_not_affect_compression_stats(self):
         parser = self.make_parser()

@@ -316,7 +316,9 @@ def mode_label(use_page):
 
 def compression_label(reader):
     stats = reader.stream.compression.summary()
-    values = (stats['min_saved_percent'], stats['max_saved_percent'], stats['avg_saved_percent'])
+    minimum = stats['min_saved_percent']
+    values = (100.0 if minimum is None else minimum,
+              stats['max_saved_percent'], stats['avg_saved_percent'])
     numbers = '/'.join('--' if value is None else f'{value:.1f}' for value in values)
     return f'compression saved% min/max/avg={numbers}'
 

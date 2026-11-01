@@ -197,10 +197,10 @@ python3 poc/host/live_mirror.py --file _output/pin-cursor-01.txt \
 主機 status bar 第二行顯示：
 
 ```text
-compression saved% min/max/avg=0.0/82.3/70.9
+compression saved% min/max/avg=48.8/82.3/71.4
 ```
 
-這是**節省百分比**，越高越好。min/max 是開啟此 capture 後有效 **data packet** 的最低／最高節省率，包含每包 32 B header 與 4 B CRC：`100 × (1 − (36 + wire_payload_length)/(36 + payload_length))`。avg 則以累計原封包 byte 數加權，`100 × (1 − 累計線上封包 bytes/累計原封包 bytes)`，不是各包百分比的算術平均。raw fallback 算 0%，idle status heartbeat 與壞包不計；尚未收到 data 或重播 legacy hex 時顯示 `--/--/--`。數據累計至這次 host process／重播結束，不因串流 gap 重置。
+這是**節省百分比**，越高越好。min/max 是開啟此 capture 後原始 payload **≥128 B** 的有效 **data packet** 的最低／最高節省率，包含每包 32 B header 與 4 B CRC：`100 × (1 − (36 + wire_payload_length)/(36 + payload_length))`。較小的包不計入 min/max：它們多半是 flush timer 切出的 frame 首尾零碎 bytes（1–4 B 無法壓縮），反映的是切包時機而非畫面內容。avg 則涵蓋所有 data 包、以累計原封包 byte 數加權，`100 × (1 − 累計線上封包 bytes/累計原封包 bytes)`，不是各包百分比的算術平均，因此仍反映小包的實際開銷。raw fallback 算 0%，idle status heartbeat 與壞包不計；尚未收到 ≥128 B 的 data 或重播 legacy hex 時 min 顯示初值 `100.0`、max 顯示 `--`，avg 在收到任何 data 前顯示 `--`。數據累計至這次 host process／重播結束，不因串流 gap 重置。
 
 TTY 在畫面像素未改變時仍每 250 ms 更新 status，不重繪 framebuffer，也不增加 `updates` 計數。等待第一個畫面時顯示 wake/change-screen 提示。原始與壓縮 STP2 檔案重播同樣顯示統計；每次結束時在 `.events.jsonl` 加入 `compression_summary`，記錄有效 data 包數、原／線上封包 bytes 及 min/max/avg。
 
@@ -242,7 +242,7 @@ python3 poc/host/live_mirror.py
 
 - 30.077 秒、289 frame／289 次重繪，約 9.61 fps。
 - 1,802 個有效 data 包；未壓縮等價量 365,144 B，實際 104,555 B，即 12.14 → 3.48 kB/s。
-- status 顯示 `compression saved% min/max/avg=0.0/82.3/71.4`；avg 精確值為 71.366%。最小 0% 包含不適合壓縮的小 raw 包。
+- status 顯示 `compression saved% min/max/avg=0.0/82.3/71.4`；avg 精確值為 71.366%。最小 0% 來自不適合壓縮的小 raw 包（當時 min/max 計入所有 data 包；現行規則只計 ≥128 B，同一擷取為 `48.8/82.3/71.4`）。
 - 沒有 CRC／header／壓縮解碼錯誤，沒有 stream gap，`dropped_total` 與 `stall_events` 增量都為 0。
 
 原始擷取為 `_output/compression/live-rle-20261101T234620.bin`，旁有 `.events.jsonl`；實際終端輸出在同名 `.terminal.log`，摘要為 `_output/compression/live-rle-status-validation.json`。此為這次畫面／負載的量測，不是 BLE 或任意 SPI 負載的保證。需還原時燒錄原 `spi_tap.uf2`；新版 host 同時支援 raw 與 RLE。

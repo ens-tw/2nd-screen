@@ -130,7 +130,7 @@ class MirrorTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), raw)
         close.assert_called_once_with(55)
         self.assertIn('received=1032B', out.getvalue())
-        self.assertIn('compression saved% min/max/avg=--/--/--', out.getvalue())
+        self.assertIn('compression saved% min/max/avg=100.0/--/--', out.getvalue())
         self.assertIn(mirror.render_frame(self.frame).splitlines()[0], out.getvalue())
 
     def test_tty_status_refreshes_for_unchanged_pixels_without_frame_redraw(self):
