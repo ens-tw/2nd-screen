@@ -48,7 +48,7 @@ python3 poc/host/live_mirror.py
 - **主機端**（`live_mirror.py` / `raster.py`）：把位元組流當垂直欄像素打包（欄定址、每欄 8 垂直位元）重建 128×64 framebuffer，印成半格 ASCII——就是第二螢幕。`live_mirror.py` 串流即時重繪；`raster.py` 把單一擷取檔還原成一張靜態畫面。
 - **診斷**（`bus_probe.c`）：無示波器時用 RP2040 的真輸入門檻硬體計 CLK 上升緣，直接回答「這條匯流排讀不讀得到」。
 
-實機量到：1.8V 的 CLK 跨得過 RP2040 門檻（切畫面時約 8312 邊緣/重繪 ≈ 一張 128×64 全畫面），為 write-on-change，**不需電平轉換**。細節見 [`docs/2nd-screen.md`](docs/2nd-screen.md)。
+實機被動擷取成功：切畫面時約 8312 邊緣/重繪 ≈ 一張 128×64 全畫面，更新行為符合 write-on-change。CLK 的 1.8 V 是 DC 電表讀值，未確認訊號振幅與電氣容限，不能據此宣稱不需電平轉換或可安全回寫。細節見 [`docs/2nd-screen.md`](docs/2nd-screen.md)。
 
 ## 安全與範圍
 

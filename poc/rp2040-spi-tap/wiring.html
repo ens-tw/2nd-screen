@@ -242,7 +242,7 @@
           <tr><td class="pin"><span class="dot" style="background:var(--w-cs)"></span>CS</td><td class="pin">GP12</td><td class="pin">D12</td><td>晶片選擇（frame 邊界）</td></tr>
           <tr><td class="pin"><span class="dot" style="background:var(--w-gnd)"></span>GND</td><td class="pin">GND</td><td class="pin">GND</td><td>共地（必接）</td></tr>
           <tr class="nc"><td class="pin">+5V vUSB</td><td colspan="2"><span class="tag-nc">不接 NC</span></td><td>探針由自身 USB 供電</td></tr>
-          <tr class="nc"><td class="pin">ON</td><td colspan="2"><span class="tag-nc">不接 NC</span></td><td>電源/致能，與旁觀無關</td></tr>
+          <tr class="nc"><td class="pin">ON</td><td colspan="2"><span class="tag-nc">不接 NC</span></td><td>用途未確認；不可猜作 D/C 或驅動</td></tr>
         </tbody>
       </table>
     </div>
@@ -275,8 +275,8 @@
       <div class="call ok">
         <span class="ic">✓</span>
         <div>
-          <h3>D/C 不用接</h3>
-          <p>目標板 是三線 SPI、D/C 內嵌；四條線就是 <code>CS/CLK/DI/GND</code>。你找到的 <code>D1</code> 即資料線 DI。</p>
+          <h3>四線擷取不代表已確認 D/C framing</h3>
+          <p><strong>[證實]</strong> 現有 <code>CS/CLK/DI/GND</code> 可被動擷取並重建像素；<code>D1</code> 為目前使用的資料接點。<strong>[待驗證]</strong> 命令／資料如何區分、是否有未引出的 D/C，以及是否為 9-bit SPI，均尚未確認。先前「D/C 內嵌」的說法證據不足；不要把 <code>ON</code> 接成 D/C，也不要沿用這份被動接線直接回寫。</p>
         </div>
       </div>
       <div class="call warn">

@@ -1,10 +1,18 @@
 # 第一螢幕單次回寫實驗
 
+**目前狀態：此候選 writer 不適用於目前已知接線，已還原被動 `spi_tap`。** 使用者確認目前只知道 `+5V vUSB / GND / ON / CS / CLK / D1`，沒有已確認的 D/C 接點。先前新增 GP9 作 D/C 是未經硬體驗證的假設，不應據此要求多接一條線，也不能將 `ON` 猜作 D/C。以下 4-wire writer 與安裝／送圖步驟僅保留為需獨立 D/C 的條件式 bench 範例，不能直接用於這組接點。
+
+**[證實：使用者回報]** 使用者執行 `send_frame.py` 後收到 `DONE 1024 49dd1d65 HIGH_Z`，但實體 OLED 沒有可見改變。這只證明 USB 請求與 firmware 寫入路徑完成；沒有量測 OLED 端實際電壓／波形，也未確認 controller 接受命令。缺少 D/C、匯流排驅動互撞或介面模式不符均不能僅憑 DONE 排除，尚不能指定單一根因。
+
+**[證實：還原]** 已以 `picotool load -v -x -f poc/build/spi-tap/spi_tap.uf2` 還原先前的被動擷取韌體，flash verification 通過，USB 產品名稱恢復為 `SPI Tap Stream v2`。目前不再安裝這個候選 writer。
+
+**下一步：確認命令／資料 framing 與硬體控制權。** 沒有可見 D/C 接點，不等於 controller 使用 9-bit SPI。SSD1306 的標準 3-wire 模式確為每字 9 bit（D/C + 8 data），4-wire 模式則為 8 bit + 獨立 D/C；實際 controller 未確認。既有 tap 每 8 bit 打包，未移除第九 bit，仍重建出穩定的命令前綴與八頁像素；這不支持直接套用標準 9-bit writer。原始串流沒有保存 CS 邊界／每次 CS 的 bit count，故也不足以單獨定案。下一份診斷擷取須保留 CS 邊界、CLK 邊緣數及 DI bits；有原理圖／controller 標記時一併比對。參考 [SSD1306 datasheet §8.1.3–8.1.4](https://www.orientdisplay.com/wp-content/uploads/2020/11/SSD1306.pdf#page=17)。
+
 **[證實：本機產圖／建置／離線驗證]** 已用本機 `~/Library/Fonts/ENSFont.ttc` 的第一個字型（ENS Font Regular）產生「腦哥」。以 1024 pt 產圖、裁去外圍空白、等比縮至 128×64 並置中，亮像素範圍為 x=0..127、y=2..61：兩字合計 128×60，無裁字。framebuffer 為 1,024 B，每頁 128 B，每 byte 的 bit0 為該欄最上像素。
 
-**[證實：2026-11-01 燒錄與 USB]** 已依使用者要求，以 `picotool load -v -x -f` 燒錄至 Feather RP2040，flash verification 通過，重開後 USB 產品名稱為 `Display Write Test`。僅送出 `HELLO`，收到 `DISPLAY_WRITE_TEST 1 DI=10 CLK=11 CS=12 DC=9`；沒有送出 `WRITE1` 或 framebuffer。程式在開機、USB 連線與 HELLO 階段保持四支 GPIO 輸入／輸出禁用。
+**[證實：2026-11-01 首次安裝與 USB]** 曾依使用者要求，以 `picotool load -v -x -f` 燒錄至 Feather RP2040，flash verification 通過，當時 USB 產品名稱為 `Display Write Test`。首次安裝檢查僅送出 `HELLO`，收到 `DISPLAY_WRITE_TEST 1 DI=10 CLK=11 CS=12 DC=9`；該檢查沒有送出 `WRITE1` 或 framebuffer。程式在開機、USB 連線與 HELLO 階段保持四支 GPIO 輸入／輸出禁用。之後使用者送圖與還原結果見上方。
 
-**[待驗證：OLED 回寫]** OLED controller 型號、D/C、邏輯電壓與原控制器隔離方式須先確認；尚未傳送至 OLED。靜態畫面不等於控制器釋放輸出；本工具不提供 SPI 仲裁。現有 DI/CLK/CS/GND 並接方式不足以執行這個寫入測試。
+**[待驗證：OLED 回寫]** OLED controller 型號、D/C／等效 framing、邏輯電壓與原控制器隔離方式仍未確認；送圖未見可見改變。靜態畫面不等於控制器釋放輸出；本工具不提供 SPI 仲裁。現有 DI/CLK/CS/GND 並接方式不足以套用這個需獨立 D/C 的寫入方案。
 
 ## 硬體條件
 
@@ -83,4 +91,4 @@ USB 流程為 `HELLO` 核對韌體與固定腳位，再送一個 `WRITE1 <CRC32>
 
 在斷開目標板後，以 BOOTSEL 安裝回 `poc/build/spi-tap/spi_tap.uf2`，關機後還原被動四線接法，再依原順序上電。重新接回原控制器時須恢復正確的顯示／定址狀態；必要時由評估板重新初始化。
 
-**驗證範圍：** 本機 8,192 像素 packing round-trip 與合成鏡像解碼一致；host 測試含 USB pseudo-terminal、錯誤韌體、遺失 ACK 不重試、dry-run 不開裝置，以及原生 C parser 的完整／截斷／損壞請求。RP2040 UF2 已建置並燒錄，flash verification 與真板 USB HELLO 通過；實體 OLED 電氣與畫面結果尚未測試。
+**驗證範圍：** 本機 8,192 像素 packing round-trip 與合成鏡像解碼一致；host 測試含 USB pseudo-terminal、錯誤韌體、遺失 ACK 不重試、dry-run 不開裝置，以及原生 C parser 的完整／截斷／損壞請求。RP2040 UF2 曾建置並燒錄，flash verification 與真板 USB HELLO 通過；使用者收到送圖 DONE 但畫面未變，硬體介面仍未確認。目前已還原被動擷取。

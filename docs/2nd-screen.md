@@ -160,7 +160,9 @@ python3 poc/host/live_mirror.py --file _output/pin-cursor-01.txt \
 
 **[推測：SSD1306-compatible 解碼]** `D5 6F/7F/8F/9F` 的低四位均為 `F`，對應除頻 16；高四位為 oscillator setting 6／7／8／9。它調整 OLED 內部掃描時脈，並不指定外部 SPI CLK、下次傳輸時刻或可用的寫入窗口。在此命令模型中，寫 GDDRAM 不要求先猜中下一個 `D5` 參數；應保存已觀察的顯示設定，只在實驗需要時改動。原控制器之後重繪也可能覆蓋實驗畫面。實際晶片尚未確認，因此這是條件式解釋，並非對該板子的回寫驗證。依據：[SSD1306 datasheet §10.1.16](https://www.orientdisplay.com/wp-content/uploads/2020/11/SSD1306.pdf#page=40)。
 
-下一步應先確認原理圖／控制器型號、D/C 與線路電壓，以及可隔離／交接的接點；不是先預測頻率參數。已新增獨立的 [`display_write_test` 與手動送圖指令](../poc/rp2040-spi-tap/display-write-test.md)，準備了 ENS Font「腦哥」128×64 候選畫面；建置／離線驗證完成，並依使用者要求燒錄至 Feather，flash verification 與 USB HELLO 通過。未送出 frame；測試韌體等待手動命令，開機與 HELLO 不啟用輸出。被動 `spi_tap` 的程式維持原行為。
+已新增獨立的 [`display_write_test` 與手動送圖指令](../poc/rp2040-spi-tap/display-write-test.md)，準備了 ENS Font「腦哥」128×64 候選畫面；建置／離線驗證、燒錄與 USB HELLO 通過。**[證實：使用者回報]** 使用者送圖收到 `DONE 1024 49dd1d65 HIGH_Z`，但實體畫面未變，並確認目前只知道 `+5V vUSB / GND / ON / CS / CLK / D1`，沒有已確認的 D/C 接點。此 writer 的 GP9 D/C 是未驗證的硬體假設，不能套用於現有接線；DONE 也沒有驗證 OLED 端實際波形或接受命令。現已還原原被動 `spi_tap`，flash verification 通過，USB 恢復 `SPI Tap Stream v2`。
+
+**[待驗證：framing]** 先前 `wiring.html` 的「三線 SPI、D/C 內嵌」說法亦無足夠證據，現已更正。缺少可見 D/C 接點不證明採用標準 9-bit SPI；目前 8-bit 打包的穩定命令／像素序列也不支持直接改用 9-bit writer。下一步須保留 CS 邊界、CLK 邊緣數與 DI bits 以確認真正 framing，並確認控制器／線路電壓與可隔離／交接的接點。`ON` 用途未確認，不猜作 D/C、不驅動；+5V vUSB 維持不接。此階段尚未確認可用現有接點直接回寫。
 
 ### 連續串流韌體（STP2）
 
