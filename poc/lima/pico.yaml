@@ -1,0 +1,54 @@
+# Lima VM：RP2040 C 工具鏈（Pico SDK）
+# 用途：建置 docs/2nd-screen.md 的被動 SPI 擷取韌體。
+# 建置在 VM 內做，產出的 .uf2 經掛載目錄回到主機，再拖到 RPI-RP2 磁碟燒錄（不需 USB passthrough）。
+# 啟動：limactl start --name=pico poc/lima/pico.yaml
+# 進入：limactl shell pico
+
+vmType: "vz"
+arch: "aarch64"
+
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+    digest: "sha256:8eb876c2ccc4b6ff89e4a65d511815923b285e04503ba465809bf587f763da24"
+
+cpus: 4
+memory: "4GiB"
+disk: "20GiB"
+
+# 掛整個 poc/（可寫）：原始碼在 poc/rp2040-spi-tap/（進 git），輸出到 poc/build/。
+# SDK 與官方範例仍留在 VM home 以求 I/O 速度（見下方 provision）。
+mounts:
+  - location: "~/cbx/2nd-screen/poc"
+    writable: true
+
+provision:
+  # 系統層：工具鏈。apt 可能因鏡像暫時失敗，重試幾次。
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      export DEBIAN_FRONTEND=noninteractive
+      for i in 1 2 3; do apt-get update && break || sleep 5; done
+      apt-get install -y --no-install-recommends \
+        git cmake ninja-build build-essential \
+        gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib \
+        python3 ca-certificates
+  # 使用者層：取得 Pico SDK 與官方範例（pio/ 底下有 SPI 與邏輯分析儀範例）。
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux
+      cd "$HOME"
+      [ -d pico-sdk ] || git clone --branch master --depth 1 --recurse-submodules --shallow-submodules https://github.com/raspberrypi/pico-sdk.git
+      [ -d pico-examples ] || git clone --depth 1 https://github.com/raspberrypi/pico-examples.git
+      grep -q PICO_SDK_PATH "$HOME/.bashrc" || echo 'export PICO_SDK_PATH="$HOME/pico-sdk"' >> "$HOME/.bashrc"
+
+probes:
+  - description: "pico-sdk 與交叉編譯器就緒"
+    script: |
+      #!/bin/bash
+      set -eu
+      test -f "$HOME/pico-sdk/pico_sdk_init.cmake"
+      command -v arm-none-eabi-gcc
+    hint: "佈建未完成，看 `limactl shell pico -- cat /var/log/cloud-init-output.log`"

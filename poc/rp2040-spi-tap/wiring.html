@@ -1,0 +1,329 @@
+<title>目標板 探針接線</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  /* 佈局：單欄；中央一張接線示意圖（左 目標板 測試點 → 右 Feather RP2040），其後對照表、護欄、指令。 */
+  :root{
+    --bg:#f3f5f6; --surface:#ffffff; --surface-2:#eef1f3;
+    --fg:#17202a; --muted:#596673; --line:#d6dce1;
+    --accent:#0b807a;                 /* 示波器磷光綠，僅用於標題/強調 */
+    --w-data:#1f9d55; --w-clk:#c7820a; --w-cs:#2563c9; --w-gnd:#6b7580; --w-nc:#d1453b;
+    --ok:#1f8a4c; --warn:#b5790a; --crit:#c73a30;
+    --ok-bg:#e8f5ec; --warn-bg:#fbf3e0; --crit-bg:#fbe9e7;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --bg:#0d1317; --surface:#161e24; --surface-2:#1d272e;
+    --fg:#e7edf1; --muted:#95a3ad; --line:#2a353d;
+    --accent:#3ad0c7;
+    --w-data:#3cc06d; --w-clk:#e8a93a; --w-cs:#5b8df0; --w-gnd:#9aa6b2; --w-nc:#ef6a60;
+    --ok:#3cc06d; --warn:#e8a93a; --crit:#ef6a60;
+    --ok-bg:#132620; --warn-bg:#2a2112; --crit-bg:#2c1512;
+    color-scheme:dark;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#0d1317; --surface:#161e24; --surface-2:#1d272e;
+    --fg:#e7edf1; --muted:#95a3ad; --line:#2a353d;
+    --accent:#3ad0c7;
+    --w-data:#3cc06d; --w-clk:#e8a93a; --w-cs:#5b8df0; --w-gnd:#9aa6b2; --w-nc:#ef6a60;
+    --ok:#3cc06d; --warn:#e8a93a; --crit:#ef6a60;
+    --ok-bg:#132620; --warn-bg:#2a2112; --crit-bg:#2c1512;
+    color-scheme:dark;
+  }
+  body{background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.55;}
+  .wrap{max-width:860px;margin:0 auto;
+    padding-left:max(16px,env(safe-area-inset-left,0px));
+    padding-right:max(16px,env(safe-area-inset-right,0px));
+    padding-block:32px 56px;}
+  header{margin-bottom:24px;}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 6px;}
+  h1{font-size:clamp(24px,5vw,32px);font-weight:600;margin:0 0 6px;text-wrap:balance;letter-spacing:-.01em;}
+  .sub{color:var(--muted);margin:0;max-width:60ch;}
+  section{margin-top:34px;}
+  h2{font-size:15px;font-weight:600;letter-spacing:.02em;margin:0 0 14px;display:flex;align-items:center;gap:9px;}
+  h2::before{content:"";width:9px;height:9px;border-radius:2px;background:var(--accent);flex:none;}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;}
+  .diagram{padding:14px 10px 6px;overflow-x:auto;}
+  svg{display:block;width:100%;height:auto;max-width:100%;min-width:560px;}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;padding:12px 18px 16px;border-top:1px solid var(--line);}
+  .legend span{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-family:var(--mono);}
+  .legend i{width:16px;height:5px;border-radius:3px;flex:none;}
+  table{width:100%;border-collapse:collapse;font-size:14px;}
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:14px;}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  thead th{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:500;background:var(--surface-2);}
+  tbody tr:last-child td{border-bottom:none;}
+  td.pin{font-family:var(--mono);font-weight:500;}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:baseline;}
+  .nc td{color:var(--muted);}
+  .tag-nc{font-family:var(--mono);font-size:12px;color:var(--w-nc);border:1px solid currentColor;border-radius:5px;padding:1px 7px;}
+  .calls{display:grid;gap:12px;}
+  .call{display:flex;gap:12px;padding:14px 16px;border-radius:12px;border:1px solid var(--line);}
+  .call.crit{background:var(--crit-bg);border-color:color-mix(in srgb,var(--crit) 40%,transparent);}
+  .call.warn{background:var(--warn-bg);border-color:color-mix(in srgb,var(--warn) 40%,transparent);}
+  .call.ok{background:var(--ok-bg);border-color:color-mix(in srgb,var(--ok) 40%,transparent);}
+  .call .ic{font-family:var(--mono);font-weight:600;flex:none;font-size:15px;}
+  .call.crit .ic{color:var(--crit);} .call.warn .ic{color:var(--warn);} .call.ok .ic{color:var(--ok);}
+  .call h3{font-size:14px;margin:0 0 3px;font-weight:600;}
+  .call p{margin:0;font-size:13.5px;color:var(--fg);}
+  .call code{font-family:var(--mono);background:var(--surface-2);padding:1px 5px;border-radius:4px;font-size:.92em;}
+  .cmd{background:var(--surface);border:1px solid var(--line);border-radius:12px;margin-bottom:12px;overflow:hidden;}
+  .cmd-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 14px;background:var(--surface-2);border-bottom:1px solid var(--line);}
+  .cmd-head span{font-size:12.5px;color:var(--muted);}
+  .cmd pre{margin:0;padding:13px 14px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.5;color:var(--fg);}
+  .copy{font-family:var(--mono);font-size:12px;color:var(--accent);background:none;border:1px solid var(--line);border-radius:6px;padding:3px 10px;cursor:pointer;}
+  .copy:hover{border-color:var(--accent);}
+  .copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  ul.notes{margin:0;padding-left:20px;color:var(--fg);font-size:13.5px;}
+  ul.notes li{margin:6px 0;}
+  ul.notes code{font-family:var(--mono);background:var(--surface-2);padding:1px 5px;border-radius:4px;font-size:.92em;}
+  .foot{margin-top:40px;font-size:12px;color:var(--muted);font-family:var(--mono);}
+  .note-lead{color:var(--fg);font-size:14px;margin:0 0 16px;}
+  figure.ref{margin:0 0 16px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--surface);}
+  figure.ref img{display:block;width:100%;height:auto;}
+  figure.ref figcaption{padding:11px 16px;font-size:13px;line-height:1.5;color:var(--muted);border-top:1px solid var(--line);}
+  figure.ref figcaption b{color:var(--fg);font-weight:600;}
+  figure.ref figcaption .sw{font-weight:600;}
+  figure.ref figcaption .sw.data{color:var(--w-data);} figure.ref figcaption .sw.clk{color:var(--w-clk);}
+  figure.ref figcaption .sw.cs{color:var(--w-cs);} figure.ref figcaption .sw.gnd{color:var(--w-gnd);}
+  figure.ref figcaption .sw.nc{color:var(--w-nc);}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">被動 SPI 螢幕探針</p>
+    <h1>目標板 → RP2040 接線</h1>
+    <p class="sub">把自有目標板的 控制器→OLED 匯流排測試點，被動高阻抗接到 Feather RP2040。四條線：資料、時脈、選擇、接地。<strong>+5V 與 ON 不接。</strong></p>
+  </header>
+
+  <section>
+    <h2>接線示意</h2>
+    <div class="card diagram">
+      <svg viewBox="0 0 800 690" role="img" style="font-family:var(--mono)" aria-label="上：目標板 主板測試點；下：Feather RP2040 排針（依 Adafruit PrettyPins）。以線色對應同一條線，+5V 與 ON 不接。">
+        <!-- ===== PANEL A：目標板（主板背面）===== -->
+        <text x="40" y="34" fill="var(--fg)" style="font-family:var(--sans);font-size:17px;font-weight:600">目標板 · 主板背面</text>
+        <text x="40" y="52" fill="var(--muted)" style="font-size:11.5px">測試點位置依該板資料手冊／原理圖</text>
+
+        <!-- 板子 -->
+        <rect x="90" y="120" width="620" height="78" rx="10" fill="#141b22" stroke="var(--line)" stroke-width="2"/>
+        <rect x="120" y="150" width="26" height="18" rx="3" fill="#1e2a35"/>
+        <rect x="640" y="150" width="34" height="20" rx="2" fill="#1e2a35"/>
+        <text x="400" y="192" text-anchor="middle" fill="#5a6773" style="font-size:9px">OLED SPI 匯流排</text>
+
+        <!-- 焊盤（實機相對位置：+5V 左、GND 中、ON/CS 偏上、CLK·D1 右側一對）-->
+        <g stroke="#d7a24a" stroke-width="2">
+          <circle cx="175" cy="168" r="7" fill="#0f141a"/>
+          <circle cx="300" cy="150" r="7" fill="#0f141a"/>
+          <circle cx="410" cy="140" r="7" fill="#0f141a"/>
+          <circle cx="500" cy="140" r="7" fill="#0f141a"/>
+          <circle cx="585" cy="166" r="7" fill="#0f141a"/>
+          <circle cx="650" cy="166" r="7" fill="#0f141a"/>
+        </g>
+        <circle cx="300" cy="150" r="3.2" fill="var(--w-gnd)"/>
+        <circle cx="500" cy="140" r="3.2" fill="var(--w-cs)"/>
+        <circle cx="585" cy="166" r="3.2" fill="var(--w-clk)"/>
+        <circle cx="650" cy="166" r="3.2" fill="var(--w-data)"/>
+
+        <!-- 導線（焊盤 → 標籤）-->
+        <g stroke-width="1.5" fill="none">
+          <path d="M410,140 L400,86" stroke="var(--w-nc)"/>
+          <path d="M500,140 L520,86" stroke="var(--w-cs)"/>
+          <path d="M175,168 L175,232" stroke="var(--w-nc)"/>
+          <path d="M300,150 L300,232" stroke="var(--w-gnd)"/>
+          <path d="M585,166 L560,232" stroke="var(--w-clk)"/>
+          <path d="M650,166 L665,232" stroke="var(--w-data)"/>
+        </g>
+
+        <!-- 上排標籤：ON（不接）、CS -->
+        <g style="font-size:11px;font-weight:700" text-anchor="middle">
+          <rect x="356" y="60" width="88" height="24" rx="6" fill="none" stroke="var(--w-nc)" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <text x="400" y="76" fill="var(--w-nc)">✕ ON</text>
+          <rect x="482" y="60" width="76" height="24" rx="6" fill="var(--w-cs)"/>
+          <text x="520" y="76" fill="#fff">CS</text>
+        </g>
+        <!-- 下排標籤：+5V（不接）、GND、CLK、D1 -->
+        <g style="font-size:11px;font-weight:700" text-anchor="middle">
+          <rect x="122" y="234" width="106" height="24" rx="6" fill="none" stroke="var(--w-nc)" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <text x="175" y="250" fill="var(--w-nc)">✕ +5V vUSB</text>
+          <rect x="262" y="234" width="76" height="24" rx="6" fill="var(--w-gnd)"/>
+          <text x="300" y="250" fill="#fff">GND</text>
+          <rect x="520" y="234" width="80" height="24" rx="6" fill="var(--w-clk)"/>
+          <text x="560" y="250" fill="#fff">CLK 時脈</text>
+          <rect x="618" y="234" width="94" height="24" rx="6" fill="var(--w-data)"/>
+          <text x="665" y="250" fill="#fff">D1 · DI 資料</text>
+        </g>
+
+        <!-- ===== 線色圖例 ===== -->
+        <text x="195" y="304" fill="var(--muted)" style="font-size:11.5px">線色＝同一條線</text>
+        <g style="font-size:11.5px;font-weight:700">
+          <rect x="300" y="294" width="12" height="12" rx="2" fill="var(--w-data)"/><text x="317" y="304" fill="var(--fg)">資料</text>
+          <rect x="360" y="294" width="12" height="12" rx="2" fill="var(--w-clk)"/><text x="377" y="304" fill="var(--fg)">時脈</text>
+          <rect x="420" y="294" width="12" height="12" rx="2" fill="var(--w-cs)"/><text x="437" y="304" fill="var(--fg)">選擇</text>
+          <rect x="480" y="294" width="12" height="12" rx="2" fill="var(--w-gnd)"/><text x="497" y="304" fill="var(--fg)">接地</text>
+          <rect x="540" y="294" width="12" height="12" rx="2" fill="none" stroke="var(--w-nc)" stroke-width="1.5" stroke-dasharray="3 2"/><text x="557" y="304" fill="var(--w-nc)">不接 +5V·ON</text>
+        </g>
+
+        <!-- ===== PANEL B：Feather RP2040（排針，依 PrettyPins）===== -->
+        <text x="40" y="352" fill="var(--fg)" style="font-family:var(--sans);font-size:17px;font-weight:600">Feather RP2040 · 排針</text>
+        <text x="40" y="370" fill="var(--muted)" style="font-size:11.5px">腳位依 Adafruit PrettyPins（product #4884）；Dn 絲印 ≠ GPIO 編號</text>
+
+        <!-- 板子（直立）-->
+        <rect x="330" y="392" width="150" height="272" rx="16" fill="#141b22" stroke="var(--line)" stroke-width="2"/>
+        <rect x="388" y="384" width="34" height="16" rx="3" fill="#2b3742"/>
+        <rect x="372" y="500" width="66" height="66" rx="4" fill="#0f141a" stroke="var(--line)"/>
+        <text x="405" y="536" text-anchor="middle" fill="#5a6773" style="font-size:8px" transform="rotate(-90 405 536)">RP2040</text>
+
+        <!-- 右緣排針焊盤 -->
+        <g fill="#d7a24a">
+          <rect x="474" y="416" width="10" height="10"/>
+          <rect x="474" y="448" width="10" height="10"/>
+          <rect x="474" y="480" width="10" height="10"/>
+          <rect x="474" y="512" width="10" height="10"/>
+          <rect x="474" y="544" width="10" height="10"/>
+        </g>
+        <rect x="326" y="432" width="10" height="10" fill="#d7a24a"/>
+
+        <!-- 導線 -->
+        <g stroke-width="1.5">
+          <line x1="484" y1="421" x2="512" y2="421" stroke="var(--line)"/>
+          <line x1="484" y1="453" x2="512" y2="453" stroke="var(--w-cs)"/>
+          <line x1="484" y1="485" x2="512" y2="485" stroke="var(--w-clk)"/>
+          <line x1="484" y1="517" x2="512" y2="517" stroke="var(--w-data)"/>
+          <line x1="484" y1="549" x2="512" y2="549" stroke="var(--line)"/>
+          <line x1="326" y1="437" x2="300" y2="437" stroke="var(--w-gnd)"/>
+        </g>
+
+        <!-- 右側標籤 -->
+        <g style="font-size:11px;font-weight:700">
+          <rect x="512" y="409" width="150" height="24" rx="6" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="520" y="425" fill="var(--muted)">D13 · GPIO13</text>
+          <rect x="512" y="441" width="182" height="24" rx="6" fill="var(--w-cs)"/>
+          <text x="520" y="457" fill="#fff">D12 · GPIO12 ← CS</text>
+          <rect x="512" y="473" width="182" height="24" rx="6" fill="var(--w-clk)"/>
+          <text x="520" y="489" fill="#fff">D11 · GPIO11 ← CLK</text>
+          <rect x="512" y="505" width="190" height="24" rx="6" fill="var(--w-data)"/>
+          <text x="520" y="521" fill="#fff">D10 · GPIO10 ← DATA</text>
+          <rect x="512" y="537" width="150" height="24" rx="6" fill="var(--surface-2)" stroke="var(--line)"/>
+          <text x="520" y="553" fill="var(--muted)">D9 · GPIO9</text>
+        </g>
+        <!-- 左側 GND -->
+        <g style="font-size:11px;font-weight:700" text-anchor="end">
+          <rect x="212" y="425" width="88" height="24" rx="6" fill="var(--w-gnd)"/>
+          <text x="292" y="441" fill="#fff">GND</text>
+        </g>
+        <text x="256" y="470" text-anchor="middle" fill="var(--muted)" style="font-size:9.5px">GND 在左側</text>
+      </svg>
+    </div>
+  </section>
+
+  <section>
+    <h2>原圖對照（實機定位）</h2>
+    <p class="note-lead">上面是<strong>重繪的示意圖</strong>，焊盤位置是照著擺的——快速看「哪條接哪、哪些不接」用。真要在板子上找點，請對照下面的 Feather <strong>原圖</strong>；目標板側的測試點依該板資料手冊／原理圖定位，下刀前用三用電表復驗。</p>
+    <figure class="ref">
+      <img src="ref/feather-rp2040-pinout-annotated.png" loading="lazy"
+           alt="Adafruit Feather RP2040 官方 PrettyPins 腳位圖，右側排針的 D12、D11、D10 與左側 GND 以彩色方框圈出。">
+      <figcaption><b>Feather RP2040 · 排針</b> — Adafruit 官方 PrettyPins（product&nbsp;#4884），彩框為本 PoC 在此板上標出的搭線腳：
+        <span class="sw cs">D12 / GPIO12 ← CS</span>、<span class="sw clk">D11 / GPIO11 ← CLK</span>、<span class="sw data">D10 / GPIO10 ← DATA</span>、<span class="sw gnd">左側 GND</span>。
+        注意 Dn 絲印 ≠ GPIO 編號。</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>對照表</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>目標板 測試點</th><th>RP2040 GPIO</th><th>Feather 腳位</th><th>作用</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="pin"><span class="dot" style="background:var(--w-data)"></span>D1（DI）</td><td class="pin">GP10</td><td class="pin">D10</td><td>資料線</td></tr>
+          <tr><td class="pin"><span class="dot" style="background:var(--w-clk)"></span>CLK</td><td class="pin">GP11</td><td class="pin">D11</td><td>時脈</td></tr>
+          <tr><td class="pin"><span class="dot" style="background:var(--w-cs)"></span>CS</td><td class="pin">GP12</td><td class="pin">D12</td><td>晶片選擇（frame 邊界）</td></tr>
+          <tr><td class="pin"><span class="dot" style="background:var(--w-gnd)"></span>GND</td><td class="pin">GND</td><td class="pin">GND</td><td>共地（必接）</td></tr>
+          <tr class="nc"><td class="pin">+5V vUSB</td><td colspan="2"><span class="tag-nc">不接 NC</span></td><td>探針由自身 USB 供電</td></tr>
+          <tr class="nc"><td class="pin">ON</td><td colspan="2"><span class="tag-nc">不接 NC</span></td><td>電源/致能，與旁觀無關</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>動手前護欄</h2>
+    <div class="calls">
+      <div class="call crit">
+        <span class="ic">⚡</span>
+        <div>
+          <h3>先量匯流排電壓，再信任任何擷取</h3>
+          <p>量 CLK 或 D1 對地電壓。<strong>3.3V</strong> → 可直接接。<strong>1.8V</strong> → RP2040 輸入高準位門檻約 2.0V，會讀得不穩（garbage/斷續，不是乾淨失敗），需串接電平轉換/比較器。</p>
+        </div>
+      </div>
+      <div class="call crit">
+        <span class="ic">✕</span>
+        <div>
+          <h3>+5V vUSB 與 ON 一律不接</h3>
+          <p>這是<strong>被動</strong>探針：RP2040 由自己的 USB 線供電（也是讀資料的管道）。把 目標板 的 +5V 接到 RP2040 可能回灌、燒壞元件。唯一共用的電源連線是 <code>GND</code>。</p>
+        </div>
+      </div>
+      <div class="call warn">
+        <span class="ic">⟂</span>
+        <div>
+          <h3>GND 必接、線要短</h3>
+          <p>共地是訊號的共同參考，少了它讀不到正確電位。MHz 訊號，探針線盡量短；GPIO 全為高阻抗輸入，不要加上拉。</p>
+        </div>
+      </div>
+      <div class="call ok">
+        <span class="ic">✓</span>
+        <div>
+          <h3>D/C 不用接</h3>
+          <p>目標板 是三線 SPI、D/C 內嵌；四條線就是 <code>CS/CLK/DI/GND</code>。你找到的 <code>D1</code> 即資料線 DI。</p>
+        </div>
+      </div>
+      <div class="call warn">
+        <span class="ic">◎</span>
+        <div>
+          <h3>目標板 測試點靠「照片」認，要復驗</h3>
+          <p>目標板 沒有公開原理圖，這幾點的位置是依該板資料手冊／原理圖對出來的。接之前先用三用電表復驗：<code>GND</code> 對金屬屏蔽/電池負極應導通；上電後量各點對地電壓辨識 <code>+5V</code> 與訊號線，別只憑照片下刀。（Feather 那側相反——有原理圖可直接定位。）</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>接好之後</h2>
+    <div class="cmd">
+      <div class="cmd-head"><span>① 燒錄被動 tap（進 BOOTSEL → 載入執行）</span>
+        <button class="copy" data-c="picotool reboot -f -u &amp;&amp; picotool load -x poc/build/spi-tap/spi_tap.uf2">複製</button></div>
+      <pre>picotool reboot -f -u &amp;&amp; picotool load -x poc/build/spi-tap/spi_tap.uf2</pre>
+    </div>
+    <div class="cmd">
+      <div class="cmd-head"><span>② 讀取（讀的同時在 目標板 觸發一次畫面重繪）</span>
+        <button class="copy" data-c="python3 poc/host/usb_probe.py --read 10">複製</button></div>
+      <pre>python3 poc/host/usb_probe.py --read 10</pre>
+    </div>
+    <ul class="notes">
+      <li>預期：畫面變動時才有 hex 突發（write-on-change）。沒資料 → 先檢查 <code>GND</code> 與電壓。</li>
+      <li>出現穩定亂碼 → SPI 極性可能不同，改 <code>spi_tap.pio</code> 的 <code>wait</code> 邊緣（預設 mode 0）。</li>
+      <li>腳位＝ <code>D10/D11/D12</code>（＝GP10/11/12）：純數位、無上拉，適合被動搭線。⚠ Feather 的 Dn 絲印 ≠ GPIO 編號，且 <code>GP4</code> 未接出（USBBOOT）、<code>GP2/GP3</code> 是 I2C（SDA/SCL），故都不用。依 Adafruit 原理圖。</li>
+      <li>想換腳位 → 改 <code>spi_tap.c</code> 的 <code>PIN_DI/PIN_CLK/PIN_CS</code>，但 DI 與 CLK 必須相鄰、且要選 Feather 有接出的腳。</li>
+      <li>要看畫面 → 跑 <code>python3 poc/host/live_mirror.py</code> 即時鏡像成第二螢幕；或存檔後 <code>python3 poc/host/raster.py &lt;檔&gt;</code> 還原單張。</li>
+    </ul>
+  </section>
+
+  <p class="foot">自有裝置 · 無敏感內容 · 被動高阻抗 · 目標板測試點依該板資料手冊、Feather 腳位依 Adafruit 原理圖 — 見 docs/2nd-screen.md</p>
+</div>
+
+<script>
+  for (const b of document.querySelectorAll(".copy")) {
+    b.addEventListener("click", async () => {
+      const text = b.getAttribute("data-c");
+      const done = () => { const o = b.textContent; b.textContent = "已複製"; setTimeout(() => b.textContent = o, 1400); };
+      try { await navigator.clipboard.writeText(text); done(); }
+      catch {
+        const pre = b.closest(".cmd").querySelector("pre");
+        const r = document.createRange(); r.selectNodeContents(pre);
+        const s = getSelection(); s.removeAllRanges(); s.addRange(r); done();
+      }
+    });
+  }
+</script>

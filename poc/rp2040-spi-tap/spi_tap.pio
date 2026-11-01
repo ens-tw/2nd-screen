@@ -1,0 +1,21 @@
+; 被動 SPI 擷取（防護評估用）— 只抄匯流排上的位元組，不含任何還原邏輯。
+;
+; 接線慣例（在 spi_tap.c 設定）：
+;   IN base 腳      = DI （資料線）
+;   IN base + 1 腳  = CLK（時脈）        ← 故 DI 與 CLK 必須是相鄰 GPIO
+;   jmp_pin         = CS （晶片選擇，低電位有效）
+;
+; 預設 SPI mode 0：CS 拉低期間，於 CLK 上升緣取樣 DI。
+; 若實測為其他 CPOL/CPHA，改 wait 的邊緣極性即可。
+; autopush 設 8：每湊滿 8 bit 自動推一個位元組進 RX FIFO。
+
+.program spi_tap
+
+idle:
+    jmp pin, idle       ; CS 為高（閒置）→ 原地等待
+bitloop:
+    wait 1 pin 1        ; 等 CLK 上升緣（IN base + 1）
+    in   pins, 1        ; 取樣 DI 一個 bit（IN base）；湊滿 8 bit autopush
+    wait 0 pin 1        ; 等 CLK 回落
+    jmp pin, idle       ; CS 拉高 → frame 結束，回到閒置
+    jmp bitloop
