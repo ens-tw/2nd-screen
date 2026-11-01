@@ -208,6 +208,105 @@ class MirrorTests(unittest.TestCase):
                 mirror.CaptureLog(other)
             self.assertFalse(other.exists())
 
+    def test_refresh_commands_decode_observed_clock_values_and_offsets(self):
+        for value in (0x6f, 0x7f, 0x8f, 0x9f):
+            prefix = bytes([0xd5, value, 0x81, 0xff, 0xa6, 0xc0, 0xa0])
+            commands = mirror.decode_refresh_prefix(prefix, 50)
+            self.assertEqual([c['bus_offset'] for c in commands], [50, 52, 54, 55, 56])
+            self.assertEqual(b''.join(bytes.fromhex(c['hex']) for c in commands), prefix)
+            self.assertEqual(commands[0]['decoded'], {'clock_divider': 16, 'oscillator_setting': value >> 4})
+            self.assertEqual(commands[0]['parameters'], [value])
+            self.assertEqual(commands[1]['decoded'], {'contrast': 255})
+            self.assertEqual(commands[2]['decoded'], {'inverted': False})
+            self.assertEqual(commands[3]['decoded'], {'direction': 'ascending'})
+            self.assertEqual(commands[4]['decoded'], {'remapped': False})
+        changed = mirror.decode_refresh_prefix(bytes.fromhex('d523817fa7c8a1'), 0)
+        self.assertEqual(changed[0]['decoded'], {'clock_divider': 4, 'oscillator_setting': 2})
+        self.assertEqual(changed[1]['decoded'], {'contrast': 127})
+        self.assertTrue(changed[2]['decoded']['inverted'])
+        self.assertEqual(changed[3]['decoded']['direction'], 'descending')
+        self.assertTrue(changed[4]['decoded']['remapped'])
+
+    def test_known_commands_are_annotated_once_and_not_left_unmatched(self):
+        events = []
+        decoder = mirror.MirrorDecoder(diagnostics=lambda kind, **data: events.append((kind, data)))
+        prefix = bytes.fromhex('d56f81ffa6c0a0')
+        wire = prefix + encode_frame(self.frame)
+        ingest(decoder, wire)
+        ingest(decoder, b'\x01\x02')  # Extra reads must not repeat annotations for the old frame.
+        decoder.finish()
+        records = [e for kind, e in events if kind == 'display_commands']
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]['frame_bus_offset'], 7)
+        self.assertEqual(len(records[0]['commands']), 13)
+        pages = records[0]['commands'][5:]
+        self.assertEqual([c['decoded']['page'] for c in pages], list(range(8)))
+        self.assertEqual([c['bus_offset'] for c in pages], [7 + page * 129 for page in range(8)])
+        extras = [e for kind, e in events if kind == 'unmatched_bus_bytes']
+        self.assertEqual([(e['bus_offset'], e['hex']) for e in extras], [(len(wire), '0102')])
+        self.assertEqual(decoder.frame, self.frame)
+
+    def test_commands_wait_for_full_frame_and_never_cross_a_gap(self):
+        prefix = bytes.fromhex('d57f81ffa6c0a0')
+        for gap in (False, True):
+            events = []
+            decoder = mirror.MirrorDecoder(diagnostics=lambda kind, **data: events.append((kind, data)))
+            ingest(decoder, prefix)
+            self.assertFalse(any(kind == 'display_commands' for kind, _ in events))
+            if gap:
+                decoder.break_stream('loss-epoch')
+            ingest(decoder, encode_frame(self.frame)[:-1])
+            self.assertFalse(any(kind == 'display_commands' for kind, _ in events))
+            ingest(decoder, encode_frame(self.frame)[-1:])
+            decoder.finish()
+            records = [e for kind, e in events if kind == 'display_commands']
+            self.assertEqual(len(records), 1)
+            self.assertEqual(len(records[0]['commands']), 8 if gap else 13)
+            extras = [e for kind, e in events if kind == 'unmatched_bus_bytes']
+            self.assertEqual(b''.join(bytes.fromhex(e['hex']) for e in extras), prefix if gap else b'')
+
+    def test_command_like_pixels_are_never_reclassified(self):
+        prefix = bytes.fromhex('d58f81ffa6c0a0')
+        frame = bytearray(self.frame)
+        frame[:7] = frame[-7:] = prefix
+        events = []
+        decoder = mirror.MirrorDecoder(diagnostics=lambda kind, **data: events.append((kind, data)))
+        # The next frame has no prefix. Its preceding seven bytes are the previous frame's pixels.
+        ingest(decoder, encode_frame(frame) + encode_frame(self.frame))
+        decoder.finish()
+        records = [e for kind, e in events if kind == 'display_commands']
+        self.assertEqual(len(records), 2)
+        self.assertTrue(all(len(e['commands']) == 8 for e in records))
+        self.assertEqual(decoder.frame, self.frame)
+
+    def test_unknown_or_truncated_prefixes_stay_in_unmatched_log(self):
+        for prefix in (bytes.fromhex('d58f81ffa5c0a0'), bytes.fromhex('81ffa6c0a0'),
+                       bytes.fromhex('d58f81ffa6c0a2')):
+            events = []
+            decoder = mirror.MirrorDecoder(diagnostics=lambda kind, **data: events.append((kind, data)))
+            ingest(decoder, prefix + encode_frame(self.frame))
+            decoder.finish()
+            records = [e for kind, e in events if kind == 'display_commands']
+            self.assertEqual(len(records[0]['commands']), 8)
+            extras = [e for kind, e in events if kind == 'unmatched_bus_bytes']
+            self.assertEqual(b''.join(bytes.fromhex(e['hex']) for e in extras), prefix)
+
+    def test_repeated_pixels_still_log_changed_command_parameters(self):
+        events = []
+        decoder = mirror.MirrorDecoder(diagnostics=lambda kind, **data: events.append((kind, data)))
+        for value in (0x6f, 0x9f):
+            ingest(decoder, bytes([0xd5, value, 0x81, 0xff, 0xa6, 0xc0, 0xa0]) + encode_frame(self.frame))
+        records = [e for kind, e in events if kind == 'display_commands']
+        self.assertEqual(len(records), 2)
+        self.assertEqual([e['commands'][0]['parameters'] for e in records], [[0x6f], [0x9f]])
+        self.assertEqual(decoder.revision, 1)
+
+    def test_raw_view_never_labels_bytes_as_display_commands(self):
+        events = []
+        decoder = mirror.MirrorDecoder(False, lambda kind, **data: events.append((kind, data)))
+        ingest(decoder, bytes.fromhex('d56f81ffa6c0a0') + encode_frame(self.frame))
+        self.assertFalse(any(kind == 'display_commands' for kind, _ in events))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -95,6 +95,34 @@ def feed_hex(line_bytes, acc):
     return len(data)
 
 
+def decode_refresh_prefix(prefix, bus_offset):
+    """Recognize the observed control-prefix grammar, never arbitrary pixel bytes.
+
+    Call only immediately before a validated full B0..B7 frame, outside a
+    previously recognized frame. Names/fields follow the SSD1306-compatible
+    command table, not a verified controller identity:
+    https://www.orientdisplay.com/wp-content/uploads/2020/11/SSD1306.pdf#page=32
+    """
+    if (len(prefix) != 7 or prefix[0] != 0xD5 or prefix[2] != 0x81
+            or prefix[4] not in (0xA6, 0xA7) or prefix[5] not in (0xC0, 0xC8)
+            or prefix[6] not in (0xA0, 0xA1)):
+        return None
+    specs = [
+        (0, 2, 'set_display_clock',
+         {'clock_divider': (prefix[1] & 0x0F) + 1, 'oscillator_setting': prefix[1] >> 4}),
+        (2, 2, 'set_contrast', {'contrast': prefix[3]}),
+        (4, 1, 'set_display_mode', {'inverted': prefix[4] == 0xA7}),
+        (5, 1, 'set_com_scan_direction',
+         {'direction': 'ascending' if prefix[5] == 0xC0 else 'descending'}),
+        (6, 1, 'set_segment_remap', {'remapped': prefix[6] == 0xA1}),
+    ]
+    return [dict(bus_offset=bus_offset + offset, length=length,
+                 hex=prefix[offset:offset + length].hex(), opcode=prefix[offset],
+                 command=name, parameters=list(prefix[offset + 1:offset + length]),
+                 decoded=decoded)
+            for offset, length, name, decoded in specs]
+
+
 class CaptureLog:
     """Exact serial input plus timestamped decoder decisions; never overwrite."""
 
@@ -161,7 +189,7 @@ class MirrorDecoder:
             self.diagnostics(kind, **details)
 
     def discard(self, count, reason):
-        """Archive every discarded bus byte not consumed by a selected frame."""
+        """Archive bytes not accounted for by a selected frame or known commands."""
         start = 0
         while start < count:
             if self.covered[start]:
@@ -210,6 +238,22 @@ class MirrorDecoder:
             self.covered[offset:offset + length] = b'\x01' * length
             span = (self.pending_offset + offset, length)
             if span != self.last_span:
+                if self.use_page:
+                    commands = []
+                    if offset >= 7 and not any(self.covered[offset - 7:offset]):
+                        prefix = decode_refresh_prefix(self.pending[offset - 7:offset], span[0] - 7)
+                        if prefix is not None:
+                            commands.extend(prefix)
+                            self.covered[offset - 7:offset] = b'\x01' * 7
+                    for page in range(H // 8):
+                        opcode = 0xB0 + page
+                        commands.append(dict(bus_offset=span[0] + page * PAGE_STRIDE,
+                                             length=1, hex=f'{opcode:02x}', opcode=opcode,
+                                             command='set_page_start_address', parameters=[],
+                                             decoded={'page': page}))
+                    self.event('display_commands', profile='ssd1306-compatible',
+                               recognition='validated-frame-boundary',
+                               frame_bus_offset=span[0], commands=commands)
                 self.event('frame_candidate', bus_offset=span[0], length=length,
                            changed=frame != self.frame, mode=mode_label(self.use_page))
                 self.last_span = span

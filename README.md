@@ -39,6 +39,7 @@ python3 poc/host/live_mirror.py
 - `--raw`：顯示最新 1024 B 的未對齊診斷畫面。
 - `--file <capture>`：不接硬體，自動辨識並重播 binary 或舊版 hex 擷取檔。
 - 即時執行會自動將全部原始輸入存至 `_output/captures/`，另存有時間戳的 `.events.jsonl`，含未用於完整幀的 bytes、封包序號、device timestamp 與 loss counters。用 `--capture _output/pin-test.txt` 自訂檔名（不覆寫既有檔案）。
+- `.events.jsonl` 的 `display_commands` 會註解已辨識的 clock、contrast、display mode、scan direction、segment mapping 與 page 命令；其餘資料仍列為 `unmatched_bus_bytes`。
 - 先確認板子狀態：`python3 poc/host/usb_probe.py`（回報 BOOTSEL／RUNNING／ABSENT）。
 
 ## 運作原理
