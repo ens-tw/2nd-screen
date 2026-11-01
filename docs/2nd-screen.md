@@ -2,16 +2,17 @@
 
 一片 Feather RP2040 被動高阻抗搭在點陣顯示**評估板**的「控制器 → OLED」SPI 匯流排上（四條線：DI/CLK/CS/GND），把匯流排位元組串流回主機；主機端把它重建成 framebuffer，即時鏡像成評估板的**第二螢幕**。
 
-探針全程**只讀、不驅動任何線**。這既是「替點陣顯示器外掛第二螢幕」的小工具。
+現有探針全程**只讀、不驅動任何線**。這既是「替點陣顯示器外掛第二螢幕」的小工具。主動改寫第一螢幕另列為評估板實驗方向，硬體前提見下節。
 
 ## 範圍
 
 - 高阻抗被動擷取 控制器→OLED 的 SPI
 - 把位元組流重建成畫面，鏡成第二螢幕
+- 研究自有評估板的第一螢幕回寫；尚未實作或驗證主動回寫
 
 ## 安全護欄
 
-1. 探針被動、只讀、不回寫、不接 MISO；唯一共用的電源連線是 `GND`（**不接 +5V**，避免回灌燒件）。
+1. 現有被動探針只讀、不回寫、不接 MISO；唯一共用的電源連線是 `GND`（**不接 +5V**，避免回灌燒件）。主動回寫需要另設硬體與韌體，不沿用這組並接方式直接驅動。
 1. RP2040 先 USB 通電再搭線（永不把活匯流排灌進未通電晶片）。
 
 ## 接線（被動、高阻抗）
@@ -143,6 +144,24 @@ python3 poc/host/live_mirror.py --file _output/pin-cursor-01.txt \
 
 本機 `_output/captures/mirror-20261101T132401Z-7e7988-known-commands.txt.events.jsonl` 為原擷取的新版註解重播：1,519 B prefix 全部辨識、1,736 個 page marker 已註解，未分類資料為 0 B；217 個 framebuffer 均保留，原始串流副本逐 byte 相同。驗證摘要：`_output/protocol-research/known-commands-validation.json`。
 
+### 第一螢幕回寫：可行性與硬體前提
+
+**[證實：程式與接線文件]** 現有四線探針只是並接到原控制器與 OLED 之間，沒有 mux、輸出隔離或控制權交接線；`spi_tap` 亦以 OEOVER／pad OD 禁止驅動。**[待驗證]** 原控制器在閒置時是否釋放輸出、實際 OLED 型號、命令／資料訊號與邏輯電壓尚未確認，因此目前不能宣稱只改韌體便能回寫。
+
+**[推測：依一般 SPI 電氣模型]** 原控制器可能在無傳輸時仍以 push-pull 驅動 CS、CLK 與 DI。CS 高只表示 OLED 未被選取，不表示控制器輸出已呈高阻抗；RP2040 此時拉低 CS 或切換 CLK／DI，仍可能造成輸出互撞。等待一段無邊緣時間也無法保證原控制器不會在下一刻開始傳輸。此判斷依 [TI SPI 介面說明](https://www.ti.com/document-viewer/lit/html/slla522)；實際板子的輸出行為仍須量測／查原理圖。
+
+可研究的硬體方案：
+
+- **原控制器協作交接**：原控制器停止傳輸並釋放所有相關輸出，明確交出與收回控制權。
+- **受控切換路徑**：在控制器與 OLED 之間加入 mux 或具輸出使能的 buffer，確保切換期間與寫入期間不會讓兩個輸出端同時驅動 OLED；須定義切換時序、原控制器在隔離期間的更新處理，以及交還後的畫面／定址狀態同步。
+- **先單獨驗證 OLED**：斷開原控制器，用符合電壓的驅動端確認命令、定址、像素資料與時序，再設計共用方案。
+
+**[待驗證：命令／資料與電壓]** 我們的「四條線」包含 GND，並未擷取 D/C。SSD1306 的 4-wire SPI 另有 D/C 訊號，3-wire SPI 則以每字 9 bit 包含 D/C；不能因四線擷取可重建，就假設四線足以正確寫入。須依實際介面補齊控制訊號。既有 DC 電表讀值也不足以確定高／低振幅與輸入容限，不能據此直接把 RP2040 的 3.3 V 輸出接回板子。參考 [SSD1306 datasheet §8.1.3–8.1.4](https://www.orientdisplay.com/wp-content/uploads/2020/11/SSD1306.pdf#page=17)。
+
+**[推測：SSD1306-compatible 解碼]** `D5 6F/7F/8F/9F` 的低四位均為 `F`，對應除頻 16；高四位為 oscillator setting 6／7／8／9。它調整 OLED 內部掃描時脈，並不指定外部 SPI CLK、下次傳輸時刻或可用的寫入窗口。在此命令模型中，寫 GDDRAM 不要求先猜中下一個 `D5` 參數；應保存已觀察的顯示設定，只在實驗需要時改動。原控制器之後重繪也可能覆蓋實驗畫面。實際晶片尚未確認，因此這是條件式解釋，並非對該板子的回寫驗證。依據：[SSD1306 datasheet §10.1.16](https://www.orientdisplay.com/wp-content/uploads/2020/11/SSD1306.pdf#page=40)。
+
+下一步應先確認原理圖／控制器型號、D/C 與線路電壓，以及可隔離／交接的接點；不是先預測頻率參數。目前不更改被動韌體，也不在並接探針上啟用輸出。
+
 ### 連續串流韌體（STP2）
 
 **[證實：建置與程式檢查]** `spi_tap.c` 使用 byte DMA 寫入 32 KiB、自然對齊的循環 buffer。第二條 DMA channel 在 ring 完成時以硬體重啟資料 DMA；IRQ 只計數 ring 次數，不負責即時 rearm。PIO 持續取樣，USB 由主迴圈以 TinyUSB 可用空間非阻塞送出，沒有每 byte `printf`。三條探針仍保持輸入、OEOVER 強制關輸出與 pad OD；不切到 PIO 輸出功能。
@@ -194,7 +213,7 @@ python3 poc/host/compare_reference.py capture.txt _output/screen1/reference.bin 
 | 量測 | 值 | 備註 |
 |---|---|---|
 | CS 對地（DC 電表） | `3.6V`[證實] | idle-high |
-| CLK 對地（DC 電表） | `1.8V`[證實] | 1.8V 訊號 |
+| CLK 對地（DC 電表） | `1.8V`[證實] | DC 讀值；不等於已確認的數位訊號振幅 |
 | `sample CS`（開機、靜態） | `1`[證實] | idle-high，證明探針有接、共地正常 |
 | `CLK rising/s`：靜態畫面 | `0`[證實] | write-on-change：靜態不 clocking |
 | `CLK rising/s`：切換畫面 | `8312`/重繪（峰 `16624`）[證實] | 每次重繪一突發，total 單調累積 2.03M→2.18M |
@@ -203,7 +222,7 @@ python3 poc/host/compare_reference.py capture.txt _output/screen1/reference.bin 
 **實跑經過**（host build：`brew install picotool ninja`、`~/pico-sdk` shallow clone + tinyusb、cmake/ninja；`picotool load -x -f` 軟體進 BOOTSEL 成功）：
 
 1. **評估板關機時**：三線恆 0、零邊緣——因匯流排無人驅動（非接線問題）。排除接線假設的關鍵：開機後 `sample CS` 立刻讀到 `1`。
-2. **評估板開機**：靜態 `rising/s=0`、`CS=1`；切畫面時 `rising/s` 跳到 **8312/重繪**（峰 16624），`total` 單調累積。**結論：1.8V CLK 跨得過 RP2040 門檻、讀得到；且為 write-on-change。** 每次重繪約 8312 邊緣 ≈ 一張 128×64 全畫面（8192 bit）。**→ 不需電平轉換。**
+2. **評估板開機**：靜態 `rising/s=0`、`CS=1`；切畫面時 `rising/s` 跳到 **8312/重繪**（峰 16624），`total` 單調累積。**結論：本次接線能取樣 CLK；更新行為符合 write-on-change。** 每次重繪約 8312 邊緣 ≈ 一張 128×64 全畫面（8192 bit）。先前由 DC 電表 1.8 V 直接推為訊號振幅並斷言不需電平轉換，證據不足；能被動讀取不代表可用 3.3 V 安全回寫。
 3. **真擷取**：block 由 16384 調小到 2048 B（bench／第二螢幕低延遲），切畫面擷得 **12,480 B** 原始垂直欄像素，`raster.py` 以 128 欄 × 頁重繪，**肉眼可讀出評估板畫面字形**——被動搭四線即可即時旁觀顯示內容，**於真機證實**。
 
 | 觀察到 | 結論 |
