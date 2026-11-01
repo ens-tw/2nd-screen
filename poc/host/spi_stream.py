@@ -67,6 +67,37 @@ def rle_decode(payload):
     return bytes(out)
 
 
+class CompressionStats:
+    """Savings across valid data packets, including header and CRC overhead.
+
+    Min/max are per packet; average is weighted by original packet byte count.
+    Ignore status heartbeats so idle time does not dilute the compression ratio.
+    """
+    def __init__(self):
+        self.packets = 0
+        self.original_bytes = 0
+        self.wire_bytes = 0
+        self.minimum = None
+        self.maximum = None
+
+    def observe(self, original_length, wire_length):
+        original = HEADER.size + original_length + 4
+        wire = HEADER.size + wire_length + 4
+        savings = 100 * (1 - wire / original)
+        self.packets += 1
+        self.original_bytes += original
+        self.wire_bytes += wire
+        self.minimum = savings if self.minimum is None else min(self.minimum, savings)
+        self.maximum = savings if self.maximum is None else max(self.maximum, savings)
+
+    def summary(self):
+        return dict(data_packets=self.packets, original_packet_bytes=self.original_bytes,
+                    wire_packet_bytes=self.wire_bytes,
+                    min_saved_percent=self.minimum, max_saved_percent=self.maximum,
+                    avg_saved_percent=(100 * (1 - self.wire_bytes / self.original_bytes)
+                                       if self.packets else None))
+
+
 class StreamParser:
     def __init__(self, on_data, on_gap, diagnostics=None):
         self.on_data = on_data
@@ -76,6 +107,7 @@ class StreamParser:
         self.previous = None
         self.expected_offset = None
         self.resync = False
+        self.compression = CompressionStats()
 
     def event(self, kind, **details):
         if self.diagnostics is not None:
@@ -147,6 +179,8 @@ class StreamParser:
                 reason = ','.join(reasons)
                 self.event('stream_gap', reason=reason, **fields)
                 self.on_gap(reason)
+            if kind == DATA:
+                self.compression.observe(len(payload), length)
             self.event('stream_packet', payload_length=len(payload), wire_payload_length=length,
                        compressed=bool(flags & RLE), **fields)
             if kind == DATA:

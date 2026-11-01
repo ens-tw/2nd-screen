@@ -31,6 +31,7 @@
   - `CMakeLists.txt`、`wiring.html`、`ref/`（Feather 腳位定位圖）。
 - `poc/host/`：主機端工具（純標準庫）。
   - `live_mirror.py`：**即時第二螢幕（主效果）**——串流重建、終端原地重繪成 ASCII 畫面。
+    - status 第二行為 `compression saved% min/max/avg`：data 包含 header／CRC 的節省率，avg 按原 byte 數加權，忽略 heartbeat／壞包；legacy 或未收 data 顯示 `--`。像素不變仍更新 status；結束時寫 `compression_summary` 事件。RLE 韌體現已燒錄，USB product 為 `SPI Stream v2 RLE`。
   - `raster.py`：單張靜態檢視（把一個擷取檔重建成一張畫面）。
   - `usb_probe.py`：找 RP2040、回報 BOOTSEL／RUNNING／ABSENT、`--read` 讀韌體輸出。
   - `make_test_frame.py` / `send_frame.py`：本機字型產圖（需 ImageMagick）／手動送一張 frame 至專用 `display_write_test`；送圖不會自動燒錄，也不做自動重試。

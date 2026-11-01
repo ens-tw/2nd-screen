@@ -18,7 +18,8 @@ pico_sdk_init()
 # Keep the original raw target available; RLE is a separate passive build.
 foreach(tap_target IN ITEMS spi_tap spi_tap_rle)
     if(tap_target STREQUAL "spi_tap_rle")
-        set(tap_product "SPI Tap Stream v2 RLE")
+        # SDK string descriptors hold at most 19 characters by default.
+        set(tap_product "SPI Stream v2 RLE")
     else()
         set(tap_product "SPI Tap Stream v2")
     endif()

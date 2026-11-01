@@ -182,7 +182,7 @@ python3 poc/host/live_mirror.py --file _output/pin-cursor-01.txt \
 
 ### 可選的逐包無損壓縮（`spi_tap_rle`）
 
-**[證實：程式與離線驗證]** 新增獨立的被動建置 `spi_tap_rle.uf2`，USB product 為 `SPI Tap Stream v2 RLE`。每包仍處理最多 256 B 原匯流排資料，不組 frame、不等待下一個畫面，也不丟棄命令或未知 bytes。原 `spi_tap.uf2` 保留未壓縮格式。PIO、DMA、短尾 flush 與輸入防驅動鎖不變。
+**[證實：程式與離線驗證]** 新增獨立的被動建置 `spi_tap_rle.uf2`，USB product 為 `SPI Stream v2 RLE`（避免 SDK 預設 19 字元限制截斷產品名）。每包仍處理最多 256 B 原匯流排資料，不組 frame、不等待下一個畫面，也不丟棄命令或未知 bytes。原 `spi_tap.uf2` 保留未壓縮格式。PIO、DMA、短尾 flush 與輸入防驅動鎖不變。
 
 壓縮僅使用 byte-run coding：
 
@@ -194,6 +194,16 @@ python3 poc/host/live_mirror.py --file _output/pin-cursor-01.txt \
 - CRC 先檢查線上 bytes，再做有長度上限的解壓；格式／CRC 壞包會中斷組幀。各包獨立，無上一包字典或上一張 framebuffer 依賴。序號／offset／epoch／drop／stall 的連續性規則保留。
 - host `stream_packet.payload_length` 為解壓後的原長度，`wire_payload_length` 為線上長度，`compressed` 標記有無 RLE。原始 capture 仍保存線上 bytes，解壓發生於匯流排解碼之前。
 
+主機 status bar 第二行顯示：
+
+```text
+compression saved% min/max/avg=0.0/82.3/70.9
+```
+
+這是**節省百分比**，越高越好。min/max 是開啟此 capture 後有效 **data packet** 的最低／最高節省率，包含每包 32 B header 與 4 B CRC：`100 × (1 − (36 + wire_payload_length)/(36 + payload_length))`。avg 則以累計原封包 byte 數加權，`100 × (1 − 累計線上封包 bytes/累計原封包 bytes)`，不是各包百分比的算術平均。raw fallback 算 0%，idle status heartbeat 與壞包不計；尚未收到 data 或重播 legacy hex 時顯示 `--/--/--`。數據累計至這次 host process／重播結束，不因串流 gap 重置。
+
+TTY 在畫面像素未改變時仍每 250 ms 更新 status，不重繪 framebuffer，也不增加 `updates` 計數。等待第一個畫面時顯示 wake/change-screen 提示。原始與壓縮 STP2 檔案重播同樣顯示統計；每次結束時在 `.events.jsonl` 加入 `compression_summary`，記錄有效 data 包數、原／線上封包 bytes 及 min/max/avg。
+
 **[證實：相同封包切法的離線重編碼]** 包含全部 STP2 header／CRC，以下只計有效封包；第一份來源前方 38 B 非封包資料不計入基準：
 
 | 來源 | 原封包總量 | RLE 封包總量 | 減少 | 依原擷取時長換算 |
@@ -203,9 +213,9 @@ python3 poc/host/live_mirror.py --file _output/pin-cursor-01.txt \
 
 兩份解壓後匯流排 SHA-256、frame offset／changed 事件及最終 framebuffer 均相同。較低資料率來自第二份畫面更新較少，不代表壓縮能固定達到某個 rate。原始 45 秒樣本逐包 DEFLATE level 1（同樣加 2 B 長度、不划算則 raw）為 178,382 B，比 RLE 的 159,140 B 大；frame-only XOR+RLE 在該樣本也沒有優於直接 RLE，且不保留全部匯流排 bytes，因此本次採無跨包依賴的 RLE。
 
-**[證實：建置與 host 驗證]** 原生 C／Python encoder 逐 byte 一致，覆蓋 772 組 raw／重複／混合資料；測試涵蓋截斷、過長解壓、CRC／sequence gap 與 raw/RLE 混合串流。兩份真擷取重播無損。Feather Release ELF 的 flash code 由 26,052 B 增至 26,732 B（+680 B），static BSS 都是 37,000 B；encoder 直接使用既有 packet buffer，沒有額外壓縮 scratch buffer。
+**[證實：建置與 host 驗證]** 原生 C／Python encoder 逐 byte 一致，覆蓋 772 組 raw／重複／混合資料；測試涵蓋截斷、過長解壓、CRC／sequence gap 與 raw/RLE 混合串流。兩份真擷取重播無損。Feather Release ELF 的 flash code 由 26,052 B 增至 26,728 B（+676 B，使用縮短後的 USB product 字串），static BSS 都是 37,000 B；encoder 直接使用既有 packet buffer，沒有額外壓縮 scratch buffer。host 共 54 項測試通過，含按 byte 加權平均、忽略 heartbeat／壞包，以及相同像素下只更新 TTY status 的檢查。
 
-**[推測／待實測：CPU 與 BLE]** 編碼為單次線性掃描、每包最多 256 B；約 10 kB/s 的來源流量下，預期 RP2040 可負擔，PIO／DMA 在壓縮期間仍持續收資料。此處尚未在真板量測新增 CPU 時間或壓縮模式的 drop／stall；離線 3.53 kB/s 也不是 Bluefruit 的實測吞吐量，且仍超過 9600 baud 8N1 的 960 B/s 上限。UART／BLE bridge 仍待實作與量測。
+**[推測／待實測：CPU 與 BLE]** 編碼為單次線性掃描、每包最多 256 B；PIO／DMA 在壓縮期間仍持續收資料。下方真板測試在約 9.6 fps 負載下沒有 drop／stall，支持 RP2040 可負擔此樣本的壓縮工作；尚未獨立量測新增 CPU 時間或測出最大可承受負載。約 3.5 kB/s 不是 Bluefruit 的實測吞吐量，且仍超過 9600 baud 8N1 的 960 B/s 上限。UART／BLE bridge 仍待實作與量測。
 
 重現離線驗證（純 Python 標準庫）：
 
@@ -228,7 +238,14 @@ picotool load -v -x -f poc/build/spi-tap/spi_tap_rle.uf2
 python3 poc/host/live_mirror.py
 ```
 
-本次僅建置／離線驗證，未中斷目前使用者執行中的 live capture，也未燒錄 RLE build。需還原時燒錄原 `spi_tap.uf2`；新版 host 同時支援 raw 與 RLE。
+**[證實：RLE 安裝與真板擷取]** 已依使用者要求燒錄 `spi_tap_rle.uf2`，picotool flash verification 通過，USB 正常列舉為 `SPI Stream v2 RLE`。更新前 serial port 已無其他 reader，無需終止既有 capture。第一個 20 秒檢查只有 80 個正常 status heartbeat；第二次擷取收到真正畫面資料，在 pseudo-terminal 執行新版 `live_mirror.py` 確認狀態列：
+
+- 30.077 秒、289 frame／289 次重繪，約 9.61 fps。
+- 1,802 個有效 data 包；未壓縮等價量 365,144 B，實際 104,555 B，即 12.14 → 3.48 kB/s。
+- status 顯示 `compression saved% min/max/avg=0.0/82.3/71.4`；avg 精確值為 71.366%。最小 0% 包含不適合壓縮的小 raw 包。
+- 沒有 CRC／header／壓縮解碼錯誤，沒有 stream gap，`dropped_total` 與 `stall_events` 增量都為 0。
+
+原始擷取為 `_output/compression/live-rle-20261101T234620.bin`，旁有 `.events.jsonl`；實際終端輸出在同名 `.terminal.log`，摘要為 `_output/compression/live-rle-status-validation.json`。此為這次畫面／負載的量測，不是 BLE 或任意 SPI 負載的保證。需還原時燒錄原 `spi_tap.uf2`；新版 host 同時支援 raw 與 RLE。
 
 ### 用照片建立像素參考，再核對 SPI 起點
 

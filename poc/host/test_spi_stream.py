@@ -135,6 +135,30 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(records[0]['wire_payload_length'], 6)
         self.assertTrue(records[0]['compressed'])
 
+    def test_compression_stats_weight_bytes_and_ignore_heartbeats(self):
+        parser = self.make_parser()
+        parser.feed(packet(b'x', seq=0) + packet(seq=1, offset=1)
+                    + rle_packet(b'\x00' * 256, seq=2, offset=1))
+        stats = parser.compression.summary()
+        self.assertEqual(stats['data_packets'], 2)
+        self.assertEqual(stats['original_packet_bytes'], 37 + 292)
+        self.assertEqual(stats['wire_packet_bytes'], 37 + 42)
+        self.assertEqual(stats['min_saved_percent'], 0)
+        self.assertAlmostEqual(stats['max_saved_percent'], 100 * (1 - 42 / 292))
+        self.assertAlmostEqual(stats['avg_saved_percent'], 100 * (1 - 79 / 329))
+        self.assertNotAlmostEqual(stats['avg_saved_percent'], stats['max_saved_percent'] / 2)
+
+    def test_bad_packets_do_not_affect_compression_stats(self):
+        parser = self.make_parser()
+        bad_crc = bytearray(rle_packet(b'\x00' * 256))
+        bad_crc[-1] ^= 1
+        parser.feed(bad_crc + packet(b'bad', flags=RLE, seq=1))
+        stats = parser.compression.summary()
+        self.assertEqual(stats['data_packets'], 0)
+        self.assertIsNone(stats['min_saved_percent'])
+        self.assertIsNone(stats['max_saved_percent'])
+        self.assertIsNone(stats['avg_saved_percent'])
+
     def test_invalid_rle_is_bounded_and_next_packet_is_independent(self):
         malformed = [b'\x00\x00\x80x', b'\x01\x01\x80x', b'\x03\x00\x80',
                      b'\x04\x00\x03x', b'\x02\x00\x80x', b'\x04\x00\x80x',

@@ -51,6 +51,7 @@ _HEX_RE = re.compile(rb'(?:[0-9a-fA-F]{2}){1,32}')
 _ALT_ON, _ALT_OFF = "\x1b[?1049h", "\x1b[?1049l"
 _CUR_OFF, _CUR_ON = "\x1b[?25l", "\x1b[?25h"
 _HOME = "\x1b[H"
+_STATUS_HOME = f"\x1b[{H // 2 + 3};1H"
 _OLED, _RST = "\x1b[97m", "\x1b[0m"
 
 def latest_frame(buf):
@@ -313,6 +314,18 @@ def mode_label(use_page):
     return 'page-sequence B0..B7' if use_page else 'RAW UNALIGNED (latest 1024B)'
 
 
+def compression_label(reader):
+    stats = reader.stream.compression.summary()
+    values = (stats['min_saved_percent'], stats['max_saved_percent'], stats['avg_saved_percent'])
+    numbers = '/'.join('--' if value is None else f'{value:.1f}' for value in values)
+    return f'compression saved% min/max/avg={numbers}'
+
+
+def live_status(frames, decoder, reader, use_page):
+    return (f'updates={frames}  received={decoder.received}B  '
+            f'{mode_label(use_page)}  (Ctrl-C to quit)\n{compression_label(reader)}')
+
+
 def box(art, status, color=True):
     label = " DOT-MATRIX EVAL BOARD  128x64  — passive bus mirror "
     top = "┌" + label + "─" * (W - len(label)) + "┐"
@@ -321,7 +334,7 @@ def box(art, status, color=True):
         body = (_OLED + ln + _RST) if color else ln
         lines.append("│" + body + "│")
     lines.append("└" + "─" * W + "┘")
-    lines.append(status)
+    lines.extend(line + ('\x1b[K' if color else '') for line in status.split('\n'))
     return "\n".join(lines) + "\n"
 
 def report_capture(capture):
@@ -347,9 +360,11 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
     decoder = MirrorDecoder(use_page, capture.event)
     reader = CaptureInput(decoder)
     deadline = (time.monotonic() + seconds) if seconds else None
-    last_render, frames, rendered_revision = 0.0, 0, -1
+    last_render, last_status, frames, rendered_revision = 0.0, 0.0, 0, -1
     if terminal:
-        sys.stdout.write(_ALT_ON + _CUR_OFF)
+        sys.stdout.write(_ALT_ON + _CUR_OFF + _HOME
+                         + 'Waiting for display update; wake the device or change screens.\x1b[K\n'
+                         + compression_label(reader) + '\x1b[K\n')
         sys.stdout.flush()
     try:
         while deadline is None or time.monotonic() < deadline:
@@ -370,8 +385,7 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
                     and decoder.revision != rendered_revision):
                 art = render_frame(decoder.frame)
                 frames += 1
-                status = (f"updates={frames}  received={decoder.received}B  "
-                          f"{mode_label(use_page)}  (Ctrl-C to quit)")
+                status = live_status(frames, decoder, reader, use_page)
                 if terminal:
                     sys.stdout.write(_HOME + box(art, status, color=True))
                 else:
@@ -379,7 +393,15 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
                 sys.stdout.flush()
                 capture.event('render', revision=decoder.revision, received_bus_bytes=decoder.received)
                 last_render = now
+                last_status = now
                 rendered_revision = decoder.revision
+            elif terminal and decoder.frame is not None and now - last_status >= 0.25:
+                # Update statistics even when pixel content stays unchanged,
+                # without redrawing the whole framebuffer or counting a render.
+                status = live_status(frames, decoder, reader, use_page)
+                sys.stdout.write(_STATUS_HOME + '\x1b[K' + status.replace('\n', '\n\x1b[K'))
+                sys.stdout.flush()
+                last_status = now
     except KeyboardInterrupt:
         pass
     finally:
@@ -388,6 +410,7 @@ def run_live(dev, use_page=True, seconds=0.0, capture_path=None):
             decoder.finish()
         finally:
             try:
+                capture.event('compression_summary', **reader.stream.compression.summary())
                 capture.close()
             finally:
                 os.close(fd)
@@ -425,6 +448,7 @@ def run_file(path, use_page=True, capture_path=None):
             decoder.finish()
         finally:
             if capture is not None:
+                capture.event('compression_summary', **reader.stream.compression.summary())
                 capture.close()
                 report_capture(capture)
     if decoder.frame is None:
@@ -433,7 +457,7 @@ def run_file(path, use_page=True, capture_path=None):
               "--raw shows an unaligned diagnostic view.")
         return 1
     print(box(render_frame(decoder.frame),
-              f"{decoder.received}B  {mode_label(use_page)}  (file replay)",
+              f"{decoder.received}B  {mode_label(use_page)}  (file replay)\n{compression_label(reader)}",
               color=sys.stdout.isatty()))
     return 0
 

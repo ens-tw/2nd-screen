@@ -1,10 +1,13 @@
 """Regression checks for byte parsing, page sync and live/replay behavior."""
 import contextlib
 import io
+import itertools
 import json
 import random
+import struct
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -127,7 +130,47 @@ class MirrorTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), raw)
         close.assert_called_once_with(55)
         self.assertIn('received=1032B', out.getvalue())
+        self.assertIn('compression saved% min/max/avg=--/--/--', out.getvalue())
         self.assertIn(mirror.render_frame(self.frame).splitlines()[0], out.getvalue())
+
+    def test_tty_status_refreshes_for_unchanged_pixels_without_frame_redraw(self):
+        from spi_stream import HEADER, MAGIC, DATA, RLE, rle_encode
+        class Terminal(io.StringIO):
+            def isatty(self):
+                return True
+        bus = encode_frame(b'\x00' * 1024)
+        chunks = []
+        seq, offset = 0, 0
+        for _ in range(2):
+            wire = bytearray()
+            for i in range(0, len(bus), 256):
+                part = bus[i:i + 256]
+                encoded = struct.pack('<H', len(part)) + rle_encode(part)
+                body = HEADER.pack(MAGIC, DATA, RLE, len(encoded), seq, 12345, offset, 1, 0, 0)
+                body += encoded
+                wire.extend(body + struct.pack('<I', zlib.crc32(body)))
+                seq += 1
+                offset += len(part)
+            chunks.append(bytes(wire))
+        chunks.append(b'')
+        out = Terminal()
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(mirror.os, 'open', return_value=55), \
+                patch.object(mirror.os, 'read', side_effect=chunks), \
+                patch.object(mirror.os, 'close'), \
+                patch.object(mirror.select, 'select', return_value=([55], [], [])), \
+                patch.object(mirror.time, 'monotonic', side_effect=itertools.count(1, 0.3).__next__), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            path = Path(directory) / 'live.bin'
+            self.assertEqual(mirror.run_live('/fake/serial', capture_path=path), 0)
+            events = [json.loads(line) for line in Path(str(path) + '.events.jsonl').read_text().splitlines()]
+        self.assertEqual(sum(e['event'] == 'render' for e in events), 1)
+        self.assertIn(mirror._STATUS_HOME, out.getvalue())
+        self.assertIn('received=2064B', out.getvalue())
+        self.assertIn('compression saved% min/max/avg=', out.getvalue())
+        stats = next(e for e in events if e['event'] == 'compression_summary')
+        self.assertEqual(stats['data_packets'], 10)
+        self.assertGreater(stats['avg_saved_percent'], 0)
 
     def test_extra_bytes_are_saved_with_original_bus_offsets(self):
         events = []
