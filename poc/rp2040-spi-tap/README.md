@@ -7,6 +7,7 @@
 
 - `spi_tap.pio` — PIO 擷取程式：CS 為 frame 邊界，CLK 邊緣取樣 DI，autopush 成位元組。
 - `spi_tap.c` — SDK 初始化、PIO/DMA 設定、連續 DMA ring 擷取，以 STP2 binary 封包經 USB CDC 串流。
+- [`display-write-test.md`](display-write-test.md) / `display_write_test.c` — 獨立的主動回寫實驗：USB 接收一張完整 frame，驗證後送出一次並回到輸入；需原控制器隔離／交接、電壓驗證與額外 D/C 接線，不能用現有四線並接直接回寫。
 - `CMakeLists.txt` — 建置設定（板子預設 `adafruit_feather_rp2040`）。
 - `wiring.html` — 接線圖：Feather RP2040 探針腳位示意 ＋ 腳位對照表、安全護欄、燒錄／讀取指令。用 `qlmanage -p wiring.html` 或瀏覽器開啟。
 - [`bluefruit-wiring.html`](bluefruit-wiring.html) — Feather RP2040 ↔ Bluefruit LE UART Friend 六線接線指南（含 RTS/CTS、SDA/SCL 的 UART 腳位對照、模式切換與可列印檢查表）；UART/BLE bridge 韌體待實作。

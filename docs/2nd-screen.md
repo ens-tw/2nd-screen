@@ -160,7 +160,7 @@ python3 poc/host/live_mirror.py --file _output/pin-cursor-01.txt \
 
 **[推測：SSD1306-compatible 解碼]** `D5 6F/7F/8F/9F` 的低四位均為 `F`，對應除頻 16；高四位為 oscillator setting 6／7／8／9。它調整 OLED 內部掃描時脈，並不指定外部 SPI CLK、下次傳輸時刻或可用的寫入窗口。在此命令模型中，寫 GDDRAM 不要求先猜中下一個 `D5` 參數；應保存已觀察的顯示設定，只在實驗需要時改動。原控制器之後重繪也可能覆蓋實驗畫面。實際晶片尚未確認，因此這是條件式解釋，並非對該板子的回寫驗證。依據：[SSD1306 datasheet §10.1.16](https://www.orientdisplay.com/wp-content/uploads/2020/11/SSD1306.pdf#page=40)。
 
-下一步應先確認原理圖／控制器型號、D/C 與線路電壓，以及可隔離／交接的接點；不是先預測頻率參數。目前不更改被動韌體，也不在並接探針上啟用輸出。
+下一步應先確認原理圖／控制器型號、D/C 與線路電壓，以及可隔離／交接的接點；不是先預測頻率參數。已新增獨立的 [`display_write_test` 與手動送圖指令](../poc/rp2040-spi-tap/display-write-test.md)，準備了 ENS Font「腦哥」128×64 候選畫面；僅完成建置／離線驗證，尚未燒錄或傳送。被動韌體維持原行為，不在並接探針上啟用輸出。
 
 ### 連續串流韌體（STP2）
 

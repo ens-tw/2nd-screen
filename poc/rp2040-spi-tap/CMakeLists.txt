@@ -79,3 +79,16 @@ target_link_libraries(bus_probe
 pico_enable_stdio_usb(bus_probe 1)
 pico_enable_stdio_uart(bus_probe 0)
 pico_add_extra_outputs(bus_probe)
+
+# Active, manual, one-shot display writer. Separate from the passive tap.
+# Requires controller isolation and an additional D/C wire on Feather D9 / GP9.
+add_executable(display_write_test display_write_test.c)
+target_include_directories(display_write_test PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(display_write_test pico_stdlib)
+target_compile_definitions(display_write_test PRIVATE
+    USBD_PRODUCT="Display Write Test"
+    PICO_STDIO_USB_ENABLE_RESET_VIA_BAUD_RATE=0
+)
+pico_enable_stdio_usb(display_write_test 1)
+pico_enable_stdio_uart(display_write_test 0)
+pico_add_extra_outputs(display_write_test)

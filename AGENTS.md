@@ -25,12 +25,14 @@
 - `poc/rp2040-spi-tap/`：RP2040 被動擷取韌體。
   - `spi_tap.c` / `.pio`：PIO 以 CS 為 frame 邊界、CLK 邊緣取樣 DI，連續 DMA ring 收進緩衝、USB CDC 以 STP2 binary 串流（有 CRC／序號／loss epoch）。
   - `bus_probe.c`：無示波器診斷——PWM 硬體計 CLK 上升緣，用真輸入門檻判斷「這條匯流排讀不讀得到」。
+  - `display_write_test.c`：獨立的主動單次回寫韌體，USB 收完整且 CRC 正確的 frame 才啟用輸出，完成後回到輸入；硬體前提與操作見 `poc/rp2040-spi-tap/display-write-test.md`，不可直接套用被動並接線路。
   - `loopback_test.c`：on-chip 自測（同板自驅自讀），驗證擷取鏈；不可在接著目標板時燒（它會驅動腳位）。
   - `CMakeLists.txt`、`wiring.html`、`ref/`（Feather 腳位定位圖）。
 - `poc/host/`：主機端工具（純標準庫）。
   - `live_mirror.py`：**即時第二螢幕（主效果）**——串流重建、終端原地重繪成 ASCII 畫面。
   - `raster.py`：單張靜態檢視（把一個擷取檔重建成一張畫面）。
   - `usb_probe.py`：找 RP2040、回報 BOOTSEL／RUNNING／ABSENT、`--read` 讀韌體輸出。
+  - `make_test_frame.py` / `send_frame.py`：本機字型產圖（需 ImageMagick）／手動送一張 frame 至專用 `display_write_test`；送圖不會自動燒錄，也不做自動重試。
 - `poc/lima/pico.yaml`：RP2040 工具鏈 VM（替代方案；本機已可直接 host build，見 README）。
 
 ## Conventions
