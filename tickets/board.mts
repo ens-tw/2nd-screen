@@ -54,7 +54,7 @@ export default [
     why: '硬體現場 demo 易出包：預錄實體搭線，現場跑決定性的即時第二螢幕；完整排練一次並備妥 fallback。',
     refs: ['docs/2nd-screen.md', 'poc/rp2040-spi-tap/README.md'],
     group: 'P',
-    status: 'blocked',
+    status: 'open',
     after: ['P-4', 'P-5'],
     next: 'owner 錄下搭線＋即時第二螢幕（live_mirror.py）片段，依 P-5 的 run of show 完整排練一次；現場以 live_mirror 為決定性橋段，確認 fallback（預錄片段）就緒。',
     blockers: [
@@ -68,7 +68,7 @@ export default [
     why: 'demo 的終點：在團隊面前跑完全程，收尾帶出顯示路徑的防護方向與下一步。',
     refs: ['docs/2nd-screen.md'],
     group: 'P',
-    status: 'blocked',
+    status: 'open',
     after: ['P-6'],
     next: '向團隊實演，收尾帶出防護方向（顯示介面納入安全邊界／顯示鏈加密/MAC／走線物理防護與開殼偵測）與下一步，記下決議。',
     blockers: [
@@ -82,7 +82,7 @@ export default [
     why: '官方不建議 9600 以上 baud，能找到的 BLE 數字約 0.5–2.4 kB/s，都不是這個組合的實測；串流最忙要 1.43 kB/s。先量才知道要不要 LZ4 或換晶片。',
     refs: ['docs/bluefruit-ble.md', 'poc/rp2040-spi-tap/bluefruit-wiring.html'],
     group: 'P',
-    status: 'blocked',
+    status: 'open',
     next: '模組接好後：寫假資料測試韌體與 bleak 接收腳本，照 docs/bluefruit-ble.md 的實測計畫跑，把結果和決定寫回該文件。',
     blockers: [
       { kind: 'owner', ask: '依 bluefruit-wiring.html 接好六線（模組已由照片確認是 Adafruit UART Friend）', since: '2026-11-02' },
@@ -95,7 +95,7 @@ export default [
     why: '每 frame 一包在約 9.6 fps 下仍約 1.4 kB/s，超過 9600 baud 8N1 的 960 B/s。離線模型估 LZ4 4 KB 視窗約 0.86 kB/s，但要犧牲每包獨立解碼。',
     refs: ['docs/2nd-screen.md', 'poc/rp2040-spi-tap/spi_tap.c', 'poc/rp2040-spi-tap/bluefruit-wiring.html'],
     group: 'P',
-    status: 'blocked',
+    status: 'open',
     after: ['P-9'],
     next: 'owner 決定要做後：先在板上實測 LZ4 壓縮率與 CPU 時間，再定字典重置週期與封包格式。依據與數字見主文件「下一步候選」。',
     blockers: [
