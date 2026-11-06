@@ -28,10 +28,14 @@ export type RecurringWindow = {
 
 export type Window = OneShotWindow | RecurringWindow;
 
+export type OwnerAs = 'hands' | 'decision' | 'errand';
+
 /** The only holds written by hand. Everything else that stops a ticket is derived (Hold). */
 export type Blocker =
-  /** A decision, a fact or a hands-on step only the owner can give. `since` = the day first asked. */
-  | { kind: 'owner'; ask: string; since: Day }
+  /** A decision, a fact or a hands-on step only the owner can give. `since` = the day first asked.
+   *  `as` says what settling it takes, for `prepare`'s order: `hands` (a step at the bench, minutes),
+   *  `decision` (an answer), `errand` (something to get or arrange that takes days: ask it first). */
+  | { kind: 'owner'; ask: string; since: Day; as?: OwnerAs }
   /** The owner's explicit go for a hazardous step (it wipes, burns, spends, publishes). */
   | { kind: 'go'; ask: string; since: Day }
   /** A third party (a broker, a vendor, a supplier). From `recheck` on, the ticket is workable again
@@ -42,6 +46,7 @@ export type Blocker =
  *  `via` says what a derived hold came from, so a wrong one can be traced. */
 export type Hold =
   | Blocker
+  | { kind: 'authorization'; needs: string; ask: string; since: Day; via: string }
   | ({ kind: 'window' } & Window)
   /** A ref of the ticket lies under one of the resource's paths. */
   | { kind: 'resource'; needs: string; via: string }
@@ -68,6 +73,8 @@ export type ExtensionDone = { kind: string; [field: string]: unknown };
 export type DoneWhen = TestDone | AnswerDone | JudgmentDone | ExtensionDone;
 
 type Base = {
+  /** Named standing permissions in config.authorizations; missing grants derive live holds. */
+  authorizations?: string[];
   id: string;
   title: string;
   /** Why the ticket exists — the reason survives when the details change. */
@@ -91,11 +98,18 @@ type Live = {
   hazard?: string;
   /** Ticket ids or group keys that must be done first (a group: every non-dropped member). */
   after?: string[];
+  /** What the work will change: repo paths (a folder ends in `/`) and `@name` for a thing on the machine
+   *  only one worker may use (a port, a bench, a browser profile). Paths need not exist yet. Two units
+   *  whose touches meet must not run at once; a unit without touches runs alone. */
+  touches?: string[];
+  /** Hand-written holds only a person or an outside party lifts. */
+  blockers?: [Blocker, ...Blocker[]];
 };
 
+/** `status` is the lifecycle a person decides; whether an open ticket can be worked now is derived
+ *  from its holds (`list`'s `state`). */
 export type Ticket = Base & (
   | ({ status: 'open' } & Live)
-  | ({ status: 'blocked'; blockers: [Blocker, ...Blocker[]] } & Live)
   /** Parked by a decision; `until` says what resumes it. */
   | { status: 'paused'; doneWhen: DoneWhen; until: string; wip?: string }
   /** `commit` must exist in git — the commit message is the record of the work. */
@@ -127,6 +141,15 @@ export type Resource = {
   probe?: () => Probe;
 };
 
+export type Authorization = {
+  what: string;
+  ask: string;
+  since: Day;
+  /** A standing grant, quoted from a tracked repo document. Removing it revokes availability.
+   *  Session-only and one-use permissions stay outside this persistent registry. */
+  grant?: { source: string; quote: string };
+};
+
 export type Caps = {
   title: number; why: number; next: number; until: number; reason: number; ask: number; what: number;
   when: number; name: number; window: number; hazard: number; policy: number; bringUp: number;
@@ -143,6 +166,7 @@ export type Met = { met: boolean; why?: string; members?: Member[] };
  *  tickets is the same part: the more specific ticket (fewer members) covers it, and the other ticket's
  *  member waits on it. */
 export type Member = {
+  authorizations?: string[];
   /** Unique within the ticket. */
   id: string;
   met: boolean;
@@ -154,6 +178,8 @@ export type Member = {
   refs?: string[];
   /** Where it stands, in a few words; `next` and `show` print it under the member. */
   note?: string;
+  /** As a ticket's: what working this member will change. */
+  touches?: string[];
 };
 
 /** Read access to the repo, for test rules and extensions. Paths are repo-relative. */
@@ -263,6 +289,7 @@ export type Config = {
   boxes?: string[];
   /** External things a ticket can need. Key order = scarcity order: the first-listed goes first. */
   resources?: Record<string, Resource>;
+  authorizations?: Record<string, Authorization>;
   /** How a `test` doneWhen is found. */
   tests?: TestRule;
   caps?: Partial<Caps>;
@@ -283,6 +310,7 @@ export type Resolved = {
   groups: Record<string, string>;
   boxes: string[];
   resources: Record<string, Resource>;
+  authorizations: Record<string, Authorization>;
   tests?: TestRule;
   caps: Caps;
   extensions: Extension[];
@@ -293,7 +321,11 @@ export type Resolved = {
 /** What derivations, checks and extensions read. `claims` (keyed `<ticket>` or `<ticket> › <member>`)
  *  is set only where machine-local state belongs — next, list, show, the status page, claim — never
  *  for check's errors or a review, which must read the same on every machine. */
-export type Ctx = { root: string; config: Resolved; io: Io; claims?: ReadonlyMap<string, Claim> };
+export type Ctx = {
+  root: string; config: Resolved; io: Io; claims?: ReadonlyMap<string, Claim>;
+  /** Tickets the board file still writes as `status: 'blocked'`; load reads them as `open`. */
+  legacyBlocked?: readonly string[];
+};
 
 /** Why `next` found nothing workable here (the long-run stop codes). */
 export type Stop =

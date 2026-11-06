@@ -24,7 +24,7 @@ import type {
   Board, Ctx, Hold, MaturityPart, Problem, Probe, ResolvedReview, ReviewEvidence, Status, Ticket,
 } from './types.mts';
 import type { NextJson } from './main.mts';
-import { byId, cacheDir, clearsAt, dependents, describeDone, describeHold, doneKind, holdsOf, isClock, memberSummary, membersOf, needs, refPath, stands } from './lib.mts';
+import { authorizationsOf, byId, cacheDir, clearsAt, dependents, describeDone, describeHold, doneKind, holdsOf, isClock, isLive, memberSummary, membersOf, needs, refPath, stands } from './lib.mts';
 import { metOf } from './checks.mts';
 import { BASE_TOOLS, KINDS, READS_AS, SHOULD_BE, tokens, type Written } from './jev.mts';
 import { isRecurring, isoLocal, today } from './windows.mts';
@@ -112,9 +112,9 @@ export function probeSummary(records: ProbeRecord[], resource: string, n: number
 
 // ── selection ────────────────────────────────────────────────────────────────────────────────────
 
-export const LIVE_STATUSES: readonly Status[] = ['open', 'blocked', 'paused'];
+export const LIVE_STATUSES: readonly Status[] = ['open', 'paused'];
 
-/** `--status live` (default) = open, blocked and paused; `all` adds done and dropped. `--ids` picks
+/** `--status live` (default) = open and paused; `all` adds done and dropped. `--ids` picks
  *  exactly those tickets, any status, unless `--status` is given too (then both must hold). */
 export function selectTickets(board: Board, opts: { ids?: string[]; status?: string }): Ticket[] | string {
   const ids = opts.ids;
@@ -354,8 +354,8 @@ function holdDates(h: Hold, t: Ticket, cx: Ctx) {
 export function dossier(t: Ticket, inp: ReviewInput): { state: Record<string, unknown>; slots: Slot[]; resources: ProbeFacts[]; deps: boolean; doneMet: boolean | null } {
   const { board, cx, now } = inp;
   const reachable = loggedReachable(inp.probes);
-  const live = t.status === 'open' || t.status === 'blocked';
-  const blockers: readonly Hold[] = t.status === 'blocked' ? t.blockers : [];
+  const live = isLive(t);
+  const blockers: readonly Hold[] = isLive(t) ? t.blockers ?? [] : [];
   const slots: Slot[] = [];
   let windowSlot = false;
   const holds = holdsOf(t.id, board, cx).map((h) => {
@@ -403,6 +403,7 @@ export function dossier(t: Ticket, inp: ReviewInput): { state: Record<string, un
   const ms = membersOf(t.id, board, cx);
 
   const state: Record<string, unknown> = {
+    ...(t.authorizations?.length ? { authorizations: authorizationsOf(t, cx) } : {}),
     today: todayLine(now),
     ticket: ms && live ? { ...t, next: 'work its members one by one — the topmost workable member first (done_condition.members)' } : t,
     position: { priority: `${board.indexOf(t) + 1} of ${board.length} (array order = priority)`, in_next: inNext(t, inp.next), board_stop_code: inp.next.stop?.code ?? null },
@@ -498,7 +499,7 @@ function nextEvidenced(status: Status): Question {
  *  question (ids are for code). */
 export function ticketQuestions(t: Ticket, x: { slots: Slot[]; resources: boolean; deps: boolean }): Record<string, Question> {
   const q: Record<string, Question> = {};
-  const live = t.status === 'open' || t.status === 'blocked';
+  const live = isLive(t);
   const closed = t.status === 'done' || t.status === 'dropped';
   q.spec_clear = noul('Do `ticket.title` and `ticket.why` say clearly what the ticket is to achieve and why — clearly enough that two people reading them would agree on the goal?', 'The goal and the reason are clear.', 'The goal is vague, or the title and why disagree about it, or it bundles goals that should be separate tickets.');
   if (t.status !== 'dropped') q.done_checkable = noul('Does the done condition (`done_condition.describe`) say concretely which state of the repo counts as done — a named test, an answer marker in a doc, a level, an artifact or an observable result — rather than a vague aim?', 'It names a concrete, checkable state.', 'It is a vague aim: nobody could say exactly when it is met.');
@@ -519,7 +520,7 @@ export function ticketQuestions(t: Ticket, x: { slots: Slot[]; resources: boolea
   }
   q.evidence_insufficient = noul('Does the state lack evidence needed to judge `ticket`\'s status and readiness — for example the doc that records its answer, the capture or commit behind its next step or its closing, or the source of a date or window it relies on? `agent_notes.missing`, when present, names evidence an agent looked for and did not find.', 'Something needed to judge it is missing from the state.', 'The state holds what is needed to judge it.');
   if (t.status !== 'dropped') q.done_verifiable = noul('Can `ticket`\'s done condition (`done_condition`) be verified mechanically — a test, an answer marker, a registry level — or by named evidence such as a commit, a capture or a doc?', 'A mechanical check or named evidence verifies it.', "Only someone's unanchored judgment can say it is met.");
-  q.contradiction = noul('Do any two of `ticket`\'s fields contradict each other, or the state? Compare every pair. For example: a blocker says the ticket waits on someone else to do X while `ticket.next` has the agent doing X itself; a number, count or level in `ticket.next` or `ticket.why` disagrees with `done_condition.now` or `done_condition.check_met`; the title names work the done condition does not cover; the status disagrees with `done_condition.check_met` or with `holds`. A difference in wording or detail is not a contradiction.', 'Two fields (or a field and the state) say incompatible things: one says A where the other says not-A.', 'Every field agrees with the others and with the state.');
+  q.contradiction = noul('Do any two of `ticket`\'s fields contradict each other, or the state? Compare every pair. For example: a blocker says the ticket waits on someone else to do X while `ticket.next` has the agent doing X itself; a number, count or level in `ticket.next` or `ticket.why` disagrees with `done_condition.now` or `done_condition.check_met`; the title names work the done condition does not cover; the status disagrees with `done_condition.check_met`. A difference in wording or detail is not a contradiction.', 'Two fields (or a field and the state) say incompatible things: one says A where the other says not-A.', 'Every field agrees with the others and with the state.');
   if (t.status === 'done') q.done_supported = { type: 'choice', instructions: 'Judge only from `done_commit` — its message lines (`head`, `lines_naming_done`) and the files it changed (`stat`). How does it relate to the claim that `done_condition.describe` is met for `ticket`?', criteria: { supports: 'It states that the condition is met, or directly implies it.', contradicts: 'It states that the condition is not met, or implies it is false.', says_nothing: 'It does not address whether the condition is met, either way.' } };
   return q;
 }
@@ -599,7 +600,7 @@ export function dupePairs(selected: Ticket[], max: number = MAX_PAIRS): Pair[] {
 function pairSide(t: Ticket, cx: Ctx) {
   return {
     id: t.id, title: t.title, why: t.why, status: t.status,
-    ...(t.status === 'open' || t.status === 'blocked' ? { next: t.next } : {}),
+    ...(isLive(t) ? { next: t.next } : {}),
     ...(t.status === 'paused' ? { until: t.until } : {}),
     done_condition: t.status === 'dropped' ? null : describeDone(t.doneWhen, cx),
     refs: t.refs ?? [],
@@ -645,6 +646,7 @@ const SHAPE: Record<Question['type'], (a: unknown) => boolean> = {
   noul: (a) => isObj(a) && typeof a.noul === 'number',
   score: (a) => isObj(a) && typeof a.score === 'number' && typeof a.confidence === 'number',
 };
+/** `blocked`: answers saved before 0.12.0. */
 const STATUSES = ['open', 'blocked', 'paused', 'done', 'dropped'];
 
 /** Is this the answers to a review request (the runner's --raw output)? A string = what is wrong. */

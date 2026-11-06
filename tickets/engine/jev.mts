@@ -11,7 +11,7 @@
 // which texts and how they were written, so a route needs nothing else.
 import { createHash } from 'node:crypto';
 import type { Blocker, Ctx, DoneWhen, Resolved, Ticket } from './types.mts';
-import { describeDone } from './lib.mts';
+import { describeDone, isLive } from './lib.mts';
 
 /** How a text is written on the board: a blocker kind, or `window` for a ticket window. */
 export type Written = 'owner' | 'go' | 'external' | 'window';
@@ -77,7 +77,7 @@ export function tokens(s: string): number {
 
 const ticketState = (t: Ticket) => ({
   id: t.id, title: t.title, why: t.why, status: t.status,
-  ...(t.status === 'open' || t.status === 'blocked' ? { next: t.next } : {}),
+  ...(isLive(t) ? { next: t.next } : {}),
   refs: t.refs ?? [],
 });
 

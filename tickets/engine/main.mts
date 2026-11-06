@@ -7,17 +7,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import type { Board, Claim, Ctx, Hold, Problem, Probe, Status, Ticket } from './types.mts';
 import {
-  daysSince, dependents, describeDone, describeHold, describeHolds, doneKind, elsewhere, evalCoverage, externals, holdsOf, isLive,
-  knownBoxes, makeCtx, memberLabel, memberSummary, membersOf, needs, onBox, probeAll, reachableOf, resourceBringUps, stands,
+  authorizationsOf, daysSince, dependents, describeDone, describeHold, describeHolds, doneKind, elsewhere, evalCoverage, externals, holdsOf, isLive,
+  knownBoxes, makeCtx, memberLabel, memberSummary, membersOf, needs, onBox, probeAll, reachableOf, refNeeds, resourceBringUps, stands,
   scopeOf, statusPagePath, stopOf, tallyCoverage, waits, windowGates, workable, type Coverage, type MemberAt, type MembersAt,
 } from './lib.mts';
-import { configProblems, boardProblems } from './validate.mts';
+import { configProblems, boardProblems, normalizeBoard } from './validate.mts';
 import { metOf, runChecks } from './checks.mts';
 import { renderHtml } from './render.mts';
-import { claimKey, dropClaim, leftoverClaims, newClaim, readClaims, takeClaim } from './claims.mts';
+import { claimKey, dropClaim, lastActive, leftoverClaims, newClaim, readClaims, takeClaim } from './claims.mts';
 import { isOpen, isoLocal, nextOpen, today } from './windows.mts';
 import { init, parseIds, stamp, upgrade } from './init.mts';
 import { readVersion } from './version.mts';
+import { writeTicket } from './write.mts';
+import { prepareReport, prepareText } from './prepare.mts';
 import { DEFAULT_ID_SRC, draftProblems, draftSource, inlineIdSrc, isDraft, parseMarkdown, reportText } from './migrate.mts';
 import {
   WRITTEN, answersPath, blockerRequest, blockerText, doneRequest, parseAnswers, routeBlocker, routeDone, tokens,
@@ -33,7 +35,7 @@ export const USAGE = `ticket-board — the work queue as typed data (tickets/boa
 
 usage: node tickets/engine/cli.mjs <command> [options]     (from anywhere in the repo)
 
-next, list, show, check and coverage print compact JSON — one object, stable field names, for an agent
+next, prepare, list, show, check and coverage print compact JSON — one object, stable field names, for an agent
 to read or pipe to jq — unless --text asks for the human-readable form (a terminal, a CI log); --json is
 accepted and changes nothing. The human view of the board is the Markdown \`write\` generates.
 
@@ -45,6 +47,14 @@ accepted and changes nothing. The human view of the board is the Markdown \`writ
                                come from the last logged probe on this machine, else unknown.
                                --group: only that config.groups key's tickets and what they wait on
                                (after, transitively); the stop code and every list weigh only those
+  prepare [--group <key>] [--on <box>] [--no-probe] [--text]
+                               before a long run: make as many tickets actionable as possible. How many
+                               a run can finish now (workable, or waiting only on tickets it finishes
+                               itself), every blocker ranked by the tickets it keeps out of reach
+                               (blocks; alone frees), and a plan: the asks that add the most tickets
+                               per ask, sets needed together counted together, pauses included as
+                               asks to resume; and the open tickets whose touches were never
+                               assessed, to plan before a fan-out. Options as for next
   check [--text]               the board against the tree: schema, prose caps, refs, stale/drift,
                                members, wip branches, done commits, the engine copy
   coverage [--text]            the whole surface at a glance, as the config.extensions coverage hooks
@@ -60,20 +70,37 @@ accepted and changes nothing. The human view of the board is the Markdown \`writ
                                is never committed. --open opens it (open / xdg-open)
   list [--status live|all] [--group <key>] [--text]
                                one line per ticket with its derived state: workable or what holds it
-                               now, its window, its member summary, its next (live = open, blocked,
+                               now, its window, its member summary, its next (live = open,
                                paused; all adds done and dropped). Probes nothing, writes nothing:
                                resources as last logged on this machine. --group: that group's tickets
   show <id> [--members] [--text]
                                one ticket: its holds, done condition and dependents; --members lists
                                every unmet member with its holds and note
-  claim --next --to <name> [--group <key>] [--by <session>] [--branch <b>] [--on <box>] [--no-probe] [--text]
+  claim --next --to <name> [--group <key>] [--skip <id>[@<member>]]… [--by <session>] [--branch <b>] [--on <box>] [--no-probe] [--text]
   claim <id> [--member <m>] --to <name> [--by <session>] [--branch <b>] [--text]
                                take the topmost workable ticket (or member) nobody has claimed, or a
                                given one, for <name> — an exclusive create, so two claims never take
                                the same one. next skips a claimed ticket; claims are machine-local,
                                shared by every worktree of the checkout, never on the board. --by =
                                the session taking it, --branch = where the work lands (check reads
-                               its last commit). Exit 3 = nothing left to claim (with the stop code)
+                               its last commit). --skip (repeatable) passes over a ticket, or one
+                               member, the caller set aside. notForWorker names what keeps a unit
+                               with the orchestrator (hazard, go, authorization); judgment = true when
+                               the done condition is not machine-checked (the worker's report carries
+                               evidence, judged before the merge). Exit 3 =
+                               nothing left to claim (with the stop code; stop null = only skipped
+                               units are workable)
+  claims [--text]              every claim on this machine, leftovers too, with its branch: whether it
+                               exists, its commits beyond its base (the ticket's wip, else main), its
+                               last sign of life and whether it is stale. Reads only
+  close <id> --commit <hash> [--text]
+  block <id> --kind owner|go --ask "<text>" [--as hands|decision|errand] [--wip <b>] [--step "<text>"]
+  block <id> --kind external --who <party> --what "<text>" [--recheck <YYYY-MM-DD>] [--wip <b>] [--step "<text>"]
+  update <id> [--step "<text>"] [--wip <branch> | --clear-wip]
+                               write one ticket's entry in tickets/board.mts, for a program working
+                               the board: close (done + commit; refused while a checkable done
+                               condition is unmet), add a blocker (since = today), set next / wip.
+                               Validated first, read back after, reverted on any difference
   release <id> [--member <m>] --to <name> [--force] [--text]
                                give a claim back; --to must be the claim's own (--force: anyone's)
   jev blocker <id> [--ask "<text>" [--as owner|go|external|window]]
@@ -86,7 +113,7 @@ accepted and changes nothing. The human view of the board is the Markdown \`writ
                                in config.jev; --save keeps blocker answers for check (tickets/jev/)
   review [--ids a,b] [--status live|all] [--dupes] [--facts <file>] [--out <dir>]
                                pro review: a dossier and one Jev request per ticket (live = open,
-                               blocked, paused), plus candidate duplicate pairs; writes them to <dir>
+                               paused), plus candidate duplicate pairs; writes them to <dir>
                                (default tickets/.cache/review/<date>/) with a token and cost estimate
                                — never calls Jev itself
   review route <answers dir|file> [--save] [--json]
@@ -120,14 +147,19 @@ const OPTIONS = {
   status: { type: 'string' }, dupes: { type: 'boolean' }, facts: { type: 'string' },
   'no-probe': { type: 'boolean' }, members: { type: 'boolean' }, text: { type: 'boolean' }, open: { type: 'boolean' },
   next: { type: 'boolean' }, to: { type: 'string' }, by: { type: 'string' }, branch: { type: 'string' }, member: { type: 'string' },
-  force: { type: 'boolean' }, group: { type: 'string' },
+  force: { type: 'boolean' }, group: { type: 'string' }, skip: { type: 'string', multiple: true },
+  commit: { type: 'string' }, kind: { type: 'string' }, who: { type: 'string' }, what: { type: 'string' }, recheck: { type: 'string' },
+  wip: { type: 'string' }, step: { type: 'string' }, 'clear-wip': { type: 'boolean' },
 } as const;
 const ALLOWED: Record<string, string[]> = {
-  '': [], next: ['on', 'json', 'text', 'no-probe', 'group'], check: ['json', 'text'], coverage: ['json', 'text'], write: [], show: ['members', 'json', 'text'], list: ['status', 'group', 'json', 'text'],
+  '': [], next: ['on', 'json', 'text', 'no-probe', 'group'], prepare: ['on', 'json', 'text', 'no-probe', 'group'], check: ['json', 'text'], coverage: ['json', 'text'], write: [], show: ['members', 'json', 'text'], list: ['status', 'group', 'json', 'text'],
   view: ['out', 'open'], help: [], init: ['ids'], upgrade: [],
   migrate: ['from-markdown', 'out', 'ids'], stamp: ['semver'], jev: ['ask', 'as', 'evidence', 'save', 'json'],
   review: ['ids', 'status', 'dupes', 'facts', 'out', 'save', 'json'],
-  claim: ['next', 'to', 'by', 'branch', 'member', 'on', 'no-probe', 'group', 'json', 'text'], release: ['to', 'member', 'force', 'json', 'text'],
+  claim: ['next', 'to', 'by', 'branch', 'member', 'on', 'no-probe', 'group', 'skip', 'json', 'text'], release: ['to', 'member', 'force', 'json', 'text'],
+  claims: ['json', 'text'],
+  close: ['commit', 'json', 'text'], block: ['kind', 'ask', 'as', 'who', 'what', 'recheck', 'wip', 'step', 'json', 'text'],
+  update: ['step', 'wip', 'clear-wip', 'json', 'text'],
 };
 
 type Out = { out: (s: string) => void; err: (s: string) => void };
@@ -179,7 +211,10 @@ export async function load(root: string): Promise<Loaded | string> {
   if (!existsSync(boardPath)) return 'no tickets/board.mts — init writes an empty one';
   let rawBoard: unknown;
   try { rawBoard = (await import(pathToFileURL(boardPath).href)).default; } catch (e) { return `tickets/board.mts does not load: ${(e as Error).message}`; }
-  return { cx, board: rawBoard as Board, problems: boardProblems(rawBoard, cx) };
+  const problems = boardProblems(rawBoard, cx);
+  if (problems.length) return { cx, board: rawBoard as Board, problems };
+  const { board, legacyBlocked } = normalizeBoard(rawBoard as unknown[]);
+  return { cx: legacyBlocked.length ? { ...cx, legacyBlocked } : cx, board, problems };
 }
 
 const fmtProblem = (p: Problem) => `${p.level.padEnd(7)} ${p.id ? `${p.id}: ` : ''}${p.message}`;
@@ -209,8 +244,18 @@ export type NextMember = { id: string; note: string | null; refs: string[]; hold
  *  (best first — the first is `member`). */
 export type NextMembers = { of: number; unmet: number; summary: string; workable: string[] };
 
+function authorizationBrief(t: { authorizations?: string[] }, cx: Ctx, m?: { authorizations?: string[] }) {
+  const names = [...new Set([...(t.authorizations ?? []), ...(m?.authorizations ?? [])])];
+  return names.length ? { authorizations: authorizationsOf({ authorizations: names }, cx) } : {};
+}
+
+function authorizationText(as: ReturnType<typeof authorizationsOf> = []): string[] {
+  return as.map((a) => `authorization ${a.name}: ${a.state} — ${a.what}${a.grant ? ` (${a.grant.source}: ${JSON.stringify(a.grant.quote)})` : ''}${a.state === 'granted' ? ' — proceed within this standing grant; do not ask again' : ''}`);
+}
+
 export type NextJson = {
   next: {
+    authorizations?: ReturnType<typeof authorizationsOf>;
     id: string; title: string; next: string; done: string; refs: string[]; hazard: string | null; wip: string | null; lines: string[];
     /** Only on a ticket whose done condition reports members: the member offered (null when every member
      *  is met — the ticket is stale, close it) and the rest in brief. `next` above is then generated. */
@@ -222,7 +267,7 @@ export type NextJson = {
   /** `member` is set on an entry that comes from a member's hold. */
   clock: { id: string; member?: string; what: string; opens: string }[];
   owner: { id: string; member?: string; ask: string; since: string; days: number }[];
-  go: { id: string; member?: string; ask: string; since: string; days: number }[];
+  go: { id: string; member?: string; authorization?: string; ask: string; since: string; days: number }[];
   external: { id: string; member?: string; who: string; what: string; recheck: string | null; due: boolean }[];
   elsewhere: { id: string; member?: string; needs: string[] }[];
   /** The claims on live work, oldest first: in progress, so never a stop reason — with \`next\` null,
@@ -239,7 +284,7 @@ export function nextReport(board: Board, cx: Ctx, reachable: ReadonlySet<string>
   const mine = (id: string) => !scope || scope.has(id);
   const work = workable(board, reachable, cx, now).filter((u) => mine(u.ticket.id));
   const gates = windowGates(board, now, cx).filter((g) => mine(g.id));
-  const t = work[0]?.ticket as (Ticket & { status: 'open' | 'blocked' }) | undefined;
+  const t = work[0]?.ticket as (Ticket & { status: 'open' }) | undefined;
   const m = work[0]?.members?.[0];
   const ms = t ? membersOf(t.id, board, cx) : undefined;
   const lines: string[] = [];
@@ -247,7 +292,7 @@ export function nextReport(board: Board, cx: Ctx, reachable: ReadonlySet<string>
     const dk = doneKind(t.doneWhen.kind, cx);
     const nowLine = dk?.now?.(t.doneWhen as never, t, cx);
     if (nowLine) lines.push(`now: ${nowLine}`);
-    if (t.status === 'blocked') for (const bl of t.blockers) {
+    for (const bl of t.blockers ?? []) {
       if (bl.kind === 'external' && bl.recheck && !stands(bl, board, reachable, now)) lines.push(`recheck: ${bl.who} — ${bl.what} (due since ${bl.recheck}): re-check, then update or remove the blocker`);
     }
     for (const h of m?.holds ?? []) {
@@ -269,6 +314,7 @@ export function nextReport(board: Board, cx: Ctx, reachable: ReadonlySet<string>
   };
   const json: NextJson = {
     next: t ? {
+      ...authorizationBrief(t, cx, m),
       id: t.id, title: t.title, next: action(t), done: describeDone(t.doneWhen, cx), refs: t.refs ?? [], hazard: t.hazard ?? null, wip: t.wip ?? null, lines,
       ...(ms ? {
         member: m ? { id: m.id, note: m.note ?? null, refs: m.refs, holds: m.holds } : null,
@@ -299,6 +345,7 @@ function nextText(board: Board, cx: Ctx, rep: ReturnType<typeof nextReport>, her
     const n = json.next;
     L.push(`next ${here}: ${n.member ? `${n.id} › ${n.member.id} — ` : `${n.id} `}${n.title}`);
     if (n.hazard) L.push(`  ⚠ HAZARD: ${n.hazard}`);
+    for (const l of authorizationText(n.authorizations)) L.push(`  ${l}`);
     L.push(`  why:  ${byId.get(n.id)?.why}`, `  do:   ${n.next}`, `  done: ${n.done}`);
     if (n.member?.holds.length) L.push(`  member holds (none stands here now): ${describeHolds(n.member.holds).join('; ')}`);
     if (n.member?.refs.length) L.push(`  member refs: ${n.member.refs.join(', ')}`);
@@ -334,8 +381,15 @@ function nextText(board: Board, cx: Ctx, rep: ReturnType<typeof nextReport>, her
     for (const o of json.owner) L.push(`  ${at(o)}  ${o.days} d, since ${o.since}: ${o.ask}`);
   }
   if (json.go.length) {
-    L.push('', 'owner go needed (a hazardous step — one yes/no each):');
-    for (const o of json.go) L.push(`  ${at(o)}  ${o.days} d, since ${o.since}: ${o.ask}`);
+    L.push('', 'owner go needed (one ask per named authorization; otherwise per step):');
+    const shown = new Set<string>();
+    for (const o of json.go) {
+      if (!o.authorization) { L.push(`  ${at(o)}  ${o.days} d, since ${o.since}: ${o.ask}`); continue; }
+      if (shown.has(o.authorization)) continue;
+      shown.add(o.authorization);
+      const waiting = json.go.filter((g) => g.authorization === o.authorization).map(at);
+      L.push(`  authorization ${o.authorization} [${waiting.join(', ')}]  ${o.days} d, since ${o.since}: ${o.ask}`);
+    }
   }
   if (json.external.length) {
     L.push('', 'external (third parties):');
@@ -362,9 +416,10 @@ function holdNow(h: Hold, now: number): string {
 
 function showText(t: Ticket, board: Board, cx: Ctx, now: number): string[] {
   const L = [`${t.id} ${t.title}   [${t.status}${t.group ? `, group ${t.group}` : ''}]`, `  why:     ${t.why}`];
+  for (const l of authorizationText(authorizationsOf(t, cx))) L.push(`  ${l}`);
   const ms = membersOf(t.id, board, cx);
   if (ms) L.push(`  members: ${memberSummary(ms, board)} — show ${t.id} --members lists them`);
-  if (t.status === 'open' || t.status === 'blocked') {
+  if (isLive(t)) {
     if (t.hazard) L.push(`  ⚠ HAZARD: ${t.hazard}`);
     if (!ms) L.push(`  next:    ${t.next}`);
     else if (t.next !== undefined) L.push(`  next:    (hand-written, overridden by its members — drop it) ${t.next}`);
@@ -378,7 +433,7 @@ function showText(t: Ticket, board: Board, cx: Ctx, now: number): string[] {
     try { m = metOf(t, cx); } catch (e) { m = { met: false, why: `the check threw: ${(e as Error).message}` }; }
     L.push(`  done:    ${describeDone(t.doneWhen, cx)}${m ? ` — ${m.met ? 'met' : 'not met'}${m.why ? ` (${m.why})` : ''}` : ''}`);
   }
-  if ((t.status === 'open' || t.status === 'blocked' || t.status === 'paused') && t.wip) L.push(`  wip:     ${t.wip}`);
+  if ((isLive(t) || t.status === 'paused') && t.wip) L.push(`  wip:     ${t.wip}`);
   const hs = holdsOf(t.id, board, cx);
   hs.forEach((h, i) => L.push(`  ${i ? '         ' : 'holds:   '}${holdNow(h, now)}`));
   const deps = dependents(board, cx).get(t.id);
@@ -389,11 +444,12 @@ function showText(t: Ticket, board: Board, cx: Ctx, now: number): string[] {
 
 /** `show <id> --json`: the ticket as written, and what the engine derives for it. */
 export type ShowJson = {
+  authorizations?: ReturnType<typeof authorizationsOf>;
   id: string; title: string; status: Status; group: string | null;
   /** The entry as written on the board. */
   ticket: Ticket;
   /** What `next` would print as its action: on a ticket with members a generated line (their summary),
-   *  else its hand-written next; null unless open or blocked. */
+   *  else its hand-written next; null unless open. */
   next: string | null;
   done: { describe: string; met: boolean | null; why: string | null } | null;
   /** Every hold, the derived ones included, as data and in words (a window with when it next opens). */
@@ -408,6 +464,7 @@ export function showJson(t: Ticket, board: Board, cx: Ctx, now: number): ShowJso
   try { m = metOf(t, cx); } catch (e) { m = { met: false, why: `the check threw: ${(e as Error).message}` }; }
   return {
     id: t.id, title: t.title, status: t.status, group: t.group ?? null, ticket: t,
+    ...authorizationBrief(t, cx),
     next: isLive(t) ? (ms ? `work its members — ${memberSummary(ms, board)}` : (t as { next?: string }).next ?? null) : null,
     done: t.status === 'dropped' ? null : { describe: describeDone(t.doneWhen, cx), met: m ? m.met : null, why: m?.why ?? null },
     holds: holdsOf(t.id, board, cx).map((h) => ({ hold: h, text: holdNow(h, now) })),
@@ -425,6 +482,7 @@ export function showJson(t: Ticket, board: Board, cx: Ctx, now: number): ShowJso
 function holdLabel(h: Hold, now: number): string {
   switch (h.kind) {
     case 'owner': case 'go': return `${h.kind} (since ${h.since})`;
+    case 'authorization': return `needs authorization ${h.needs}`;
     case 'external': return `external (${h.who}${h.recheck ? `, recheck ${h.recheck}` : ''})`;
     case 'window': return `window (opens ${nextOpen(h, now)?.iso ?? 'never within a year'})`;
     case 'resource': return `needs ${h.needs}`;
@@ -435,6 +493,7 @@ function holdLabel(h: Hold, now: number): string {
 }
 
 export type ListRow = {
+  authorizations?: ReturnType<typeof authorizationsOf>;
   id: string; status: Status; title: string; group: string | null;
   /** workable = `next` could offer it here now; claimed = someone has it (its only standing hold is a
    *  claim); held = something else in `stops` stands. */
@@ -446,6 +505,8 @@ export type ListRow = {
   /** Its action as `next` would print it (the member on a ticket with members); paused: until; done: the
    *  commit; dropped: the reason. Whole here, truncated in the text. */
   next: string;
+  /** The ticket's own `touches`: a list (`[]` = changes no repo file), or null when never assessed (0.15.1). */
+  touches: string[] | null;
 };
 
 export type ListJson = {
@@ -465,7 +526,7 @@ export function listJson(board: Board, cx: Ctx, cached: ReadonlyMap<string, Prob
     const first = w?.members?.[0];
     const stops = (isLive(t) ? holdsOf(t.id, board, cx).filter(stand) : []).map((h) => ({ kind: h.kind, label: holdLabel(h, now) }));
     if (isLive(t) && !w && !stops.length && ms?.unmet.length) stops.push({ kind: 'members', label: 'no member workable here now' });
-    const win = (t.status === 'open' || t.status === 'blocked') && t.window ? t.window : undefined;
+    const win = isLive(t) && t.window ? t.window : undefined;
     let next: string;
     if (t.status === 'paused') next = `until: ${t.until}`;
     else if (t.status === 'done') next = `done in ${t.commit}`;
@@ -475,11 +536,13 @@ export function listJson(board: Board, cx: Ctx, cached: ReadonlyMap<string, Prob
     else next = t.next ?? '';
     return {
       id: t.id, status: t.status, title: t.title, group: t.group ?? null,
+      ...authorizationBrief(t, cx),
       state: t.status === 'paused' || t.status === 'done' || t.status === 'dropped' ? t.status : w ? 'workable' : stops.length && stops.every((x) => x.kind === 'claim') ? 'claimed' : 'held',
       stops,
       window: win ? { what: win.what, open: isOpen(win, now), opens: isOpen(win, now) ? null : nextOpen(win, now)?.iso ?? null } : null,
       members: ms ? { all: ms.all, met: ms.met, unmet: ms.unmet.length, summary: memberSummary(ms, board, isLive(t) ? { reachable, now } : undefined) } : null,
       next,
+      touches: isLive(t) && t.touches !== undefined ? [...t.touches] : null,
     };
   });
   const resources = Object.fromEntries(Object.keys(cx.config.resources).map((n) => {
@@ -497,6 +560,7 @@ function listText(j: ListJson): string[] {
   for (const r of j.tickets) {
     const state = r.state === 'held' || r.state === 'claimed' ? `${r.state}: ${r.stops.map((s) => s.label).join(' · ')}` : r.state === 'workable' && r.window?.open ? 'workable (window open)' : r.state;
     L.push(`${r.id.padEnd(w)}  ${r.status.padEnd(7)}  ${state}  — ${r.title}${r.members ? ` · members: ${r.members.summary}` : ''} · ${clip(r.next, 100)}`);
+    for (const l of authorizationText(r.authorizations)) L.push(`  ${l}`);
   }
   if (!j.tickets.length) L.push('no ticket');
   return L;
@@ -506,16 +570,16 @@ export type MembersJson = {
   id: string; title: string; status: string; all: number; met: number; unmet: number; summary: string;
   /** Every unmet member, in the order reported: what holds it (`label`, '' = workable), its holds as
    *  data and in words (a window with when it next opens), its note and refs. */
-  members: { id: string; label: string; holds: Hold[]; described: string[]; note: string | null; refs: string[] }[];
+  members: { id: string; label: string; holds: Hold[]; described: string[]; note: string | null; refs: string[]; authorizations?: ReturnType<typeof authorizationsOf> }[];
   /** Members left out for their shape (check reports them). */
   invalid: string[];
 };
 
 /** `show <id> --members`: every unmet member with its holds and note, and the met count. */
-export function membersJson(t: Ticket, ms: MembersAt, board: Board, now: number): MembersJson {
+export function membersJson(t: Ticket, ms: MembersAt, board: Board, now: number, cx: Ctx): MembersJson {
   return {
     id: t.id, title: t.title, status: t.status, all: ms.all, met: ms.met, unmet: ms.unmet.length, summary: memberSummary(ms, board),
-    members: ms.unmet.map((m) => ({ id: m.id, label: memberLabel(m), holds: m.holds, described: m.holds.map((h) => holdNow(h, now)), note: m.note ?? null, refs: m.refs })),
+    members: ms.unmet.map((m) => ({ id: m.id, label: memberLabel(m), holds: m.holds, described: m.holds.map((h) => holdNow(h, now)), note: m.note ?? null, refs: m.refs, ...authorizationBrief(t, cx, m) })),
     invalid: ms.invalid,
   };
 }
@@ -524,6 +588,7 @@ function membersText(j: MembersJson): string[] {
   const L = [`${j.id} ${j.title}   [${j.status}]`, `  members: ${j.met} of ${j.all} met — ${j.summary}`];
   if (j.members.length) L.push('', `not met (${j.unmet}), in the order reported:`);
   for (const m of j.members) {
+    for (const l of authorizationText(m.authorizations)) L.push(`  ${m.id}: ${l}`);
     L.push(`  ${m.id} — ${m.label || 'workable (nothing holds it)'}`);
     m.described.forEach((d, i) => L.push(`      ${i ? '       ' : 'holds: '}${d}`));
     if (m.note) L.push(`      note:  ${m.note}`);
@@ -581,8 +646,8 @@ function jevCmd(pos: string[], v: JevOpts, board: Board, cx: Ctx, cwd: string): 
   if (sub === 'blocker') {
     let texts: { slot: string; written: Written | null; text: string }[];
     if (v.ask !== undefined) texts = [{ slot: 'ask', written: (v.as as Written | undefined) ?? null, text: v.ask.trim() }];
-    else if (t.status === 'blocked') texts = t.blockers.map((bl, j) => ({ slot: `b${j}`, written: bl.kind, text: blockerText(bl) }));
-    else { io.err(`${t.id} is ${t.status}: it has no blockers — pass the text you are about to write: --ask "…" [--as ${WRITTEN.join('|')}]`); return 2; }
+    else if (isLive(t) && t.blockers) texts = t.blockers.map((bl, j) => ({ slot: `b${j}`, written: bl.kind, text: blockerText(bl) }));
+    else { io.err(`${t.id} has no blockers — pass the text you are about to write: --ask "…" [--as ${WRITTEN.join('|')}]`); return 2; }
     io.out(JSON.stringify(blockerRequest(t, cx, texts), null, 2));
     io.err(jevHint('blocker'));
     return 0;
@@ -658,7 +723,7 @@ function reviewArgsProblem(pos: string[], v: ReviewOpts): string {
   if (pos.length !== 1) return `review takes no argument "${pos[1]}" (review route <answers> routes answers)`;
   const extra = given.filter((k) => k === 'save' || k === 'json');
   if (extra.length) return `review takes no --${extra.join(', --')} (those belong to review route)`;
-  if (v.status !== undefined && v.status !== 'live' && v.status !== 'all') return '--status must be live (open, blocked, paused) or all';
+  if (v.status !== undefined && v.status !== 'live' && v.status !== 'all') return '--status must be live (open, paused) or all';
   if (v.ids !== undefined && !v.ids.split(',').some((x) => x.trim())) return '--ids needs ticket ids, comma-separated';
   return '';
 }
@@ -696,7 +761,7 @@ function reviewBuild(v: ReviewOpts, board: Board, cx: Ctx, root: string, cwd: st
     facts = f;
   }
   if (!sel.length) {
-    io.out(`nothing to review: no ${v.status === 'all' ? '' : 'open, blocked or paused '}ticket${ids ? ` among ${ids.join(', ')}` : ' on the board'}`);
+    io.out(`nothing to review: no ${v.status === 'all' ? '' : 'open or paused '}ticket${ids ? ` among ${ids.join(', ')}` : ' on the board'}`);
     return 0;
   }
   // Review never probes: reachability and reliability come from the log `next` keeps.
@@ -718,7 +783,7 @@ function reviewBuild(v: ReviewOpts, board: Board, cx: Ctx, root: string, cwd: st
   const sum = tok.reduce((a, b) => a + b, 0);
   const usd = (sum / 1e6) * USD_PER_MTOK;
   const questions = all.reduce((s, r) => s + Object.keys(r.questions).length, 0);
-  const byStatus = ['open', 'blocked', 'paused', 'done', 'dropped'].map((s) => [s, sel.filter((t) => t.status === s).length] as const).filter(([, n]) => n);
+  const byStatus = ['open', 'paused', 'done', 'dropped'].map((s) => [s, sel.filter((t) => t.status === s).length] as const).filter(([, n]) => n);
   const over = all.flatMap((r) => {
     const st = tokens(JSON.stringify(r.state)) + Math.max(...Object.values(r.questions).map((q) => tokens(JSON.stringify(q))));
     return st > 32_000 ? [`⚠ ${requestName(r)}: ~${st} tokens of state plus its longest question, over the 32k a request allows — the runner will refuse it`] : [];
@@ -796,17 +861,20 @@ export async function main(argv: string[], engineUrl: URL): Promise<number> {
   if (bad.length) { io.err(`${cmd || 'the summary'} takes no --${bad.join(', --')}\n\n${USAGE}`); return 2; }
   if (v.text && v.json) { io.err(`--text and --json: pick one (JSON is the default)\n\n${USAGE}`); return 2; }
   // next, list, show, check and coverage answer in JSON unless --text; --json is the default spelled out.
-  const json = ['next', 'list', 'show', 'check', 'coverage', 'claim', 'release'].includes(cmd) ? !v.text : !!v.json;
+  const json = ['next', 'prepare', 'list', 'show', 'check', 'coverage', 'claim', 'release', 'claims', 'close', 'block', 'update'].includes(cmd) ? !v.text : !!v.json;
   if (cmd === 'jev' || cmd === 'review') {
     const bad = cmd === 'jev' ? jevArgsProblem(pos, v) : reviewArgsProblem(pos, v);
     if (bad) { io.err(`${bad}\n\n${USAGE}`); return 2; }
   } else if (cmd === 'claim' || cmd === 'release') {
     const bad = claimArgsProblem(cmd, pos, v);
     if (bad) { io.err(`${bad}\n\n${USAGE}`); return 2; }
+  } else if (cmd === 'close' || cmd === 'block' || cmd === 'update') {
+    const bad = writeArgsProblem(cmd, pos, v);
+    if (bad) { io.err(`${bad}\n\n${USAGE}`); return 2; }
   } else {
     const wantArgs = cmd === 'show' ? 2 : 1;
     if (pos.length > wantArgs || (cmd === 'show' && pos.length < 2)) { io.err(`${cmd === 'show' ? 'show takes exactly one ticket id' : `unexpected argument "${pos[1]}"`}\n\n${USAGE}`); return 2; }
-    if (cmd === 'list' && v.status !== undefined && v.status !== 'live' && v.status !== 'all') { io.err(`--status must be live (open, blocked, paused) or all\n\n${USAGE}`); return 2; }
+    if (cmd === 'list' && v.status !== undefined && v.status !== 'live' && v.status !== 'all') { io.err(`--status must be live (open, paused) or all\n\n${USAGE}`); return 2; }
   }
 
   const root = findRoot();
@@ -869,6 +937,8 @@ export async function main(argv: string[], engineUrl: URL): Promise<number> {
 
   if (cmd === 'claim') return claimCmd(pos, v, board, cxc, root, now, engineDir, json, scope);
   if (cmd === 'release') return releaseCmd(pos, v, board, root, json);
+  if (cmd === 'claims') return claimsCmd(board, cx, root, now, json);
+  if (cmd === 'close' || cmd === 'block' || cmd === 'update') return writeCmd(cmd, pos[1], v, board, cx, root, now, json);
 
   if (cmd === 'next') {
     const here = reachHere(v, board, cxc, root, now, engineDir);
@@ -895,6 +965,15 @@ export async function main(argv: string[], engineUrl: URL): Promise<number> {
     return rep.json.next ? 0 : 3;
   }
 
+  if (cmd === 'prepare') {
+    const here = reachHere(v, board, cxc, root, now, engineDir);
+    if (typeof here === 'string') { io.err(here); return 2; }
+    const j = prepareReport(board, cxc, here.reachable, here.seen, now, v.group);
+    if (json) emit(j);
+    else for (const l of prepareText(j)) io.out(l);
+    return 0;
+  }
+
   if (cmd === 'show') {
     const t = board.find((x) => x.id === pos[1]);
     if (!t) { io.err(`no ticket ${pos[1]} on the board`); return 2; }
@@ -902,7 +981,7 @@ export async function main(argv: string[], engineUrl: URL): Promise<number> {
     if (v.members) {
       const ms = membersOf(t.id, board, cxc);
       if (!ms) { io.err(`${t.id}: its done condition ${t.status === 'dropped' ? '— none, it is dropped —' : `(${describeDone(t.doneWhen, cxc)})`} reports no members`); return 2; }
-      const j = membersJson(t, ms, board, now);
+      const j = membersJson(t, ms, board, now, cxc);
       if (json) emit(j);
       else for (const l of membersText(j)) io.out(l);
       return 0;
@@ -922,8 +1001,10 @@ export async function main(argv: string[], engineUrl: URL): Promise<number> {
 
   // no command: counts + the live tickets
   const count = (s: string) => board.filter((t) => t.status === s).length;
-  io.out(`board: ${count('open')} open · ${count('blocked')} blocked · ${count('paused')} paused · ${count('done')} done · ${count('dropped')} dropped`);
-  for (const l of listText(listJson(board, cxc, lastProbes(readProbeLog(root), thisBox()), now, 'live'))) io.out(l);
+  const live = listJson(board, cxc, lastProbes(readProbeLog(root), thisBox()), now, 'live');
+  const held = live.tickets.filter((r) => r.state === 'held').length;
+  io.out(`board: ${count('open')} open (${held} held) · ${count('paused')} paused · ${count('done')} done · ${count('dropped')} dropped`);
+  for (const l of listText(live)) io.out(l);
   return 0;
 }
 
@@ -1000,6 +1081,11 @@ function claimArgsProblem(cmd: 'claim' | 'release', pos: string[], v: Record<str
     return '';
   }
   if (v.to === undefined) return 'claim needs --to <name>: the label of whoever works it (e.g. worker-3)';
+  if (v.skip !== undefined && !v.next) return '--skip goes with claim --next';
+  for (const s of (v.skip as string[] | undefined) ?? []) {
+    const u = skipUnit(s);
+    if (!u.ticket || u.member === '') return `--skip "${s}": a ticket id, or <id>@<member>`;
+  }
   if (v.next) {
     if (pos.length > 1) return 'claim --next takes no ticket id (claim <id> takes one)';
     if (v.member !== undefined) return 'claim --next picks the member itself: drop --member';
@@ -1013,8 +1099,21 @@ function claimArgsProblem(cmd: 'claim' | 'release', pos: string[], v: Record<str
 type ClaimJson = {
   claim: Claim | null;
   /** What the claimed work is — the brief a worker starts from. */
-  ticket?: { id: string; title: string; why: string; next: string; done: string; refs: string[]; hazard: string | null; wip: string | null };
+  ticket?: { id: string; title: string; why: string; next: string; done: string; refs: string[]; hazard: string | null; wip: string | null; authorizations?: ReturnType<typeof authorizationsOf> };
   member?: { id: string; note: string | null; refs: string[] } | null;
+  /** What keeps the unit with the orchestrator, from the ticket itself: `hazard`, `go`, `authorization`
+   *  (it depends on a standing grant). Empty: a worker may take it. Overlap with running work is the
+   *  orchestrator's to judge. */
+  notForWorker?: string[];
+  /** The done condition is one the engine cannot check (`judgment`, or an extension kind with no answer):
+   *  a worker may take it, its report carries evidence per clause, and the orchestrator judges that
+   *  evidence before merging (0.15.0; until then `judgment` sat in notForWorker). */
+  judgment?: boolean;
+  /** What the unit will change: the ticket's and the member's `touches` together; `[]` when they declare
+   *  that nothing changes; null when neither has assessed it (0.15.1: scheduled freely, unchecked at merge). */
+  touches?: string[] | null;
+  /** The config.resources its refs (and the member's) lie under. */
+  resources?: string[];
   /** Holds that stand on a ticket claimed by id (claim <id> takes it anyway; next would not offer it). */
   held?: string[];
   /** Refused: the claim that already has it. */
@@ -1024,18 +1123,51 @@ type ClaimJson = {
   claimed?: Claim[];
 };
 
-function claimBrief(t: Ticket & { status: 'open' | 'blocked' }, m: MemberAt | undefined, cx: Ctx): Pick<ClaimJson, 'ticket' | 'member'> {
+/** `T-1` → the ticket, `T-1@PlaceOrder` → one member. A ticket id on the board wins, whole or as the
+ *  longest prefix before an `@`; otherwise the first `@` separates. */
+function skipUnit(s: string, ids: readonly string[] = []): { ticket: string; member?: string } {
+  const x = s.trim();
+  if (ids.includes(x)) return { ticket: x };
+  const id = ids.filter((i) => x.startsWith(`${i}@`)).sort((a, b) => b.length - a.length)[0];
+  if (id !== undefined) return { ticket: id, member: x.slice(id.length + 1).trim() };
+  const i = x.indexOf('@');
+  return i < 0 ? { ticket: x } : { ticket: x.slice(0, i).trim(), member: x.slice(i + 1).trim() };
+}
+
+/** `go` and `authorization` count the claimed member's own too. */
+function notForWorker(t: Ticket & { status: 'open' }, m: MemberAt | undefined, board: Board, cx: Ctx): string[] {
+  const why: string[] = [];
+  if (t.hazard) why.push('hazard');
+  if ([...holdsOf(t.id, board, cx), ...(m?.holds ?? [])].some((h) => h.kind === 'go')) why.push('go');
+  if (t.authorizations?.length || m?.authorizations?.length) why.push('authorization');
+  return why;
+}
+
+/** A done condition the engine cannot check (`judgment`, or an extension kind whose met is undefined);
+ *  a member is checked by its extension, so a member unit never is one. */
+function isJudgment(t: Ticket & { status: 'open' }, m: MemberAt | undefined, cx: Ctx): boolean {
+  if (m) return false;
+  try { return metOf(t, cx) === undefined; } catch { return true; }
+}
+
+function claimBrief(t: Ticket & { status: 'open' }, m: MemberAt | undefined, board: Board, cx: Ctx): Pick<ClaimJson, 'ticket' | 'member' | 'notForWorker' | 'judgment' | 'touches' | 'resources'> {
+  const touched = [...(t.touches ?? []), ...(m?.touches ?? [])];
+  const assessed = t.touches !== undefined || m?.touches !== undefined;
   const next = m ? clip(`member ${m.id}${m.note ? ` — ${m.note}` : ''}`, cx.config.caps.next) : t.next ?? '';
   return {
-    ticket: { id: t.id, title: t.title, why: t.why, next, done: describeDone(t.doneWhen, cx), refs: t.refs ?? [], hazard: t.hazard ?? null, wip: t.wip ?? null },
+    ticket: { id: t.id, title: t.title, why: t.why, next, done: describeDone(t.doneWhen, cx), refs: t.refs ?? [], hazard: t.hazard ?? null, wip: t.wip ?? null, ...authorizationBrief(t, cx, m) },
     member: m ? { id: m.id, note: m.note ?? null, refs: m.refs } : null,
+    notForWorker: notForWorker(t, m, board, cx),
+    judgment: isJudgment(t, m, cx),
+    touches: assessed ? [...new Set(touched)] : null,
+    resources: [...new Set(refNeeds([...(t.refs ?? []), ...(m?.refs ?? [])], cx).map((r) => r.needs))],
   };
 }
 
 function claimText(j: ClaimJson): string[] {
   if (j.heldBy) return [`already claimed by ${j.heldBy.to}${j.heldBy.branch ? ` on ${j.heldBy.branch}` : ''} since ${j.heldBy.at} (${j.heldBy.host})`];
   if (!j.claim) {
-    const L = [`nothing left to claim here — stop: ${j.stop?.code ?? 'none'}${j.stop?.until ? ` ${j.stop.until}` : ''}`];
+    const L = [j.stop === null ? 'nothing left to claim but the units you skipped' : `nothing left to claim here — stop: ${j.stop?.code ?? 'none'}${j.stop?.until ? ` ${j.stop.until}` : ''}`];
     for (const c of j.claimed ?? []) L.push(`  claimed: ${claimKey(c.ticket, c.member)}  ${c.to}${c.branch ? ` on ${c.branch}` : ''} since ${c.at}`);
     if (j.claimed?.length) L.push('  wait for these before you stop');
     return L;
@@ -1043,6 +1175,9 @@ function claimText(j: ClaimJson): string[] {
   const t = j.ticket!;
   const L = [`claimed ${claimKey(j.claim.ticket, j.claim.member)} for ${j.claim.to}${j.claim.branch ? ` on ${j.claim.branch}` : ''} — ${t.title}`];
   if (t.hazard) L.push(`  ⚠ HAZARD: ${t.hazard}`);
+  if (j.notForWorker?.length) L.push(`  not for a worker: ${j.notForWorker.join(', ')}`);
+  if (j.judgment) L.push('  judgment: the done condition is not machine-checked — the worker reports evidence per clause (EVIDENCE.md); judge it before the merge');
+  for (const l of authorizationText(t.authorizations)) L.push(`  ${l}`);
   L.push(`  why:  ${t.why}`, `  do:   ${t.next}`, `  done: ${t.done}`);
   if (t.refs.length) L.push(`  refs: ${t.refs.join(', ')}`);
   if (j.member?.refs.length) L.push(`  member refs: ${j.member.refs.join(', ')}`);
@@ -1061,20 +1196,36 @@ function claimCmd(pos: string[], v: Record<string, any>, board: Board, cx: Ctx, 
     if (typeof here === 'string') { io.err(here); return 2; }
     // Best first, as next offers them; a candidate another worker took meanwhile fails the exclusive
     // create, and the next one is tried.
-    for (const w of workable(board, here.reachable, cx, now)) {
-      if (scope && !scope.has(w.ticket.id)) continue;
-      const t = w.ticket as Ticket & { status: 'open' | 'blocked' };
-      for (const m of w.members ?? [undefined]) {
-        const c = newClaim({ ticket: t.id, member: m?.id, ...who }, now);
-        if (takeClaim(root, c)) continue;
-        return out({ claim: c, ...claimBrief(t, m, cx) }, 0);
+    const ids = board.map((t) => t.id);
+    const skips = ((v.skip as string[] | undefined) ?? []).map((x) => skipUnit(x, ids));
+    const skipped = (id: string, member?: string) => skips.some((s) => s.ticket === id && (s.member === undefined || s.member === member));
+    let skippedAny = false;
+    const attempt = (ctx: Ctx): ClaimJson | undefined => {
+      for (const w of workable(board, here.reachable, ctx, now)) {
+        if (scope && !scope.has(w.ticket.id)) continue;
+        const t = w.ticket as Ticket & { status: 'open' };
+        for (const m of w.members ?? [undefined]) {
+          if (skipped(t.id, m?.id)) { skippedAny = true; continue; }
+          const c = newClaim({ ticket: t.id, member: m?.id, ...who }, now);
+          if (takeClaim(root, c)) continue;
+          return { claim: c, ...claimBrief(t, m, board, ctx) };
+        }
       }
+      return undefined;
+    };
+    const got = attempt({ ...cx, claims: readClaims(root).claims });
+    if (got) return out(got, 0);
+    let fresh: Ctx = { ...cx, claims: readClaims(root).claims };
+    if (!skippedAny && stopOf(board, here.reachable, fresh, now, scope) === null) {
+      const again = attempt(fresh);
+      if (again) return out(again, 0);
+      fresh = { ...cx, claims: readClaims(root).claims };
     }
-    return out({ claim: null, stop: stopOf(board, here.reachable, cx, now, scope), claimed: liveClaims(board, cx).filter((c) => !scope || scope.has(c.ticket)) }, 3);
+    return out({ claim: null, stop: stopOf(board, here.reachable, fresh, now, scope), claimed: liveClaims(board, fresh).filter((c) => !scope || scope.has(c.ticket)) }, 3);
   }
   const t = board.find((x) => x.id === pos[1]);
   if (!t) { io.err(`no ticket ${pos[1]} on the board`); return 2; }
-  if (!isLive(t)) { io.err(`${t.id} is ${t.status} — only an open or blocked ticket can be claimed`); return 1; }
+  if (!isLive(t)) { io.err(`${t.id} is ${t.status} — only an open ticket can be claimed`); return 1; }
   const ms = membersOf(t.id, board, cx);
   let m: MemberAt | undefined;
   if (v.member !== undefined) {
@@ -1087,7 +1238,7 @@ function claimCmd(pos: string[], v: Record<string, any>, board: Board, cx: Ctx, 
   if (heldBy) return out({ claim: null, heldBy }, 1);
   const reachable = new Set(Object.keys(cx.config.resources));
   const held = [...holdsOf(t.id, board, cx), ...(m?.holds ?? [])].filter((h) => h.kind !== 'claim' && h.kind !== 'resource' && stands(h, board, reachable, now)).map(describeHold);
-  return out({ claim: c, ...claimBrief(t as Ticket & { status: 'open' | 'blocked' }, m, cx), ...(held.length ? { held } : {}) }, 0);
+  return out({ claim: c, ...claimBrief(t as Ticket & { status: 'open' }, m, board, cx), ...(held.length ? { held } : {}) }, 0);
 }
 
 function releaseCmd(pos: string[], v: Record<string, any>, board: Board, root: string, json: boolean): number {
@@ -1098,6 +1249,118 @@ function releaseCmd(pos: string[], v: Record<string, any>, board: Board, root: s
   dropClaim(root, c.ticket, c.member);
   if (json) emit({ released: c });
   else io.out(`released ${key} (was ${c.to}${c.branch ? ` on ${c.branch}` : ''}${board.some((t) => t.id === c.ticket) ? '' : '; the ticket is not on the board'})`);
+  return 0;
+}
+
+type ClaimRow = Claim & {
+  /** live = it holds open work; leftover = its ticket is closed, paused or gone, or its member met (`why`). */
+  state: 'live' | 'leftover'; why?: string;
+  /** none = the claim names no branch; missing = it names one that does not exist here; no-git = not a git
+   *  checkout, so the branch was not inspected. */
+  branchState: 'none' | 'missing' | 'found' | 'no-git';
+  /** What the branch's own commits are counted from: the ticket's wip, else config.main. */
+  base: string;
+  /** Commits on the branch beyond base; null when either is missing. A new branch has 0, whatever its last commit's date. */
+  ahead: number | null;
+  /** The later of the claim's time and its branch's last commit. */
+  lastActive: string;
+  stale: boolean;
+};
+
+/** Every claim on this machine with what its branch shows — the inventory an orchestrator starts from
+ *  after a restart. Reads the claims and git only; writes nothing, probes nothing. */
+function claimsCmd(board: Board, cx: Ctx, root: string, now: number, json: boolean): number {
+  const read = readClaims(root);
+  const over = new Map(leftoverClaims(board, cx, read.claims).map((x) => [x.claim, x.why]));
+  const ids = new Map(board.map((t) => [t.id, t]));
+  const has = (ref: string) => cx.io.hasGit && cx.io.git('rev-parse', '--verify', '--quiet', ref).ok;
+  const rows: ClaimRow[] = [...read.claims.values()].sort((x, y) => x.at.localeCompare(y.at)).map((c) => {
+    const a = lastActive(c, cx);
+    const t = ids.get(c.ticket) as { wip?: string } | undefined;
+    const base = c.member === undefined && t?.wip && t.wip !== c.branch ? t.wip : cx.config.main;
+    const baseRef = [`refs/heads/${base}`, `refs/remotes/origin/${base}`].find(has);
+    let ahead: number | null = null;
+    if (a.branch === 'found' && baseRef) {
+      const r = cx.io.git('rev-list', '--count', `${baseRef}..refs/heads/${c.branch}`, '--');
+      if (r.ok && /^\d+$/.test(r.out)) ahead = Number(r.out);
+    }
+    const why = over.get(c);
+    return {
+      ...c, state: why === undefined ? 'live' : 'leftover', ...(why === undefined ? {} : { why }),
+      branchState: c.branch && !cx.io.hasGit ? 'no-git' : a.branch, base, ahead, lastActive: new Date(a.ms).toISOString(),
+      stale: why === undefined && now - a.ms > cx.config.claimStaleHours * 3_600_000,
+    };
+  });
+  if (json) emit({ claims: rows, unreadable: read.bad });
+  else {
+    if (!rows.length && !read.bad.length) io.out('no claims on this machine');
+    for (const r of rows) {
+      const branch = r.branchState === 'none' ? 'no branch' : r.branchState === 'no-git' ? `${r.branch} (no git: not inspected)` : r.branchState === 'missing' ? `${r.branch} (missing)` : `${r.branch}: ${r.ahead ?? '?'} commit(s) beyond ${r.base}`;
+      io.out(`${claimKey(r.ticket, r.member)}  ${r.to}  ${r.state}${r.why ? ` (${r.why})` : ''}${r.stale ? ' · stale' : ''} · ${branch} · last active ${r.lastActive}`);
+    }
+    for (const f of read.bad) io.out(`unreadable: ${f}`);
+  }
+  return 0;
+}
+
+// ── close / block / update ───────────────────────────────────────────────────────────────────────
+// The only commands that write tickets/board.mts, one entry at a time (write.mts), for a program that
+// works the board without an LLM. A person still edits the file by hand.
+
+function writeArgsProblem(cmd: 'close' | 'block' | 'update', pos: string[], v: Record<string, unknown>): string {
+  if (pos.length !== 2) return `${cmd} takes exactly one ticket id`;
+  for (const k of ['commit', 'kind', 'ask', 'as', 'who', 'what', 'recheck', 'wip', 'step']) {
+    if (v[k] !== undefined && !(typeof v[k] === 'string' && (v[k] as string).trim())) return `--${k} must not be empty`;
+  }
+  if (cmd === 'close' && v.commit === undefined) return 'close needs --commit <hash>: the commit that met the done condition';
+  if (cmd === 'block') {
+    if (v.kind === 'owner' || v.kind === 'go') {
+      if (v.ask === undefined) return `block --kind ${v.kind} needs --ask "<what only the owner can give>"`;
+      if (v.who !== undefined || v.what !== undefined || v.recheck !== undefined) return `--who, --what and --recheck go with --kind external`;
+      if (v.as !== undefined && (v.kind !== 'owner' || !['hands', 'decision', 'errand'].includes(v.as as string))) return '--as is hands, decision or errand, on --kind owner';
+    } else if (v.kind === 'external') {
+      if (v.who === undefined || v.what === undefined) return 'block --kind external needs --who <party> and --what "<what they owe>"';
+      if (v.ask !== undefined || v.as !== undefined) return '--ask and --as go with --kind owner or go';
+    } else return 'block needs --kind owner, go or external';
+  }
+  if (cmd === 'update') {
+    if (v.step === undefined && v.wip === undefined && !v['clear-wip']) return 'update needs --step "<the next action>", --wip <branch> or --clear-wip';
+    if (v.wip !== undefined && v['clear-wip']) return '--wip and --clear-wip: pick one';
+  }
+  return '';
+}
+
+async function writeCmd(cmd: 'close' | 'block' | 'update', id: string, v: Record<string, any>, board: Board, cx: Ctx, root: string, now: number, json: boolean): Promise<number> {
+  const t = board.find((x) => x.id === id);
+  if (!t) { io.err(`no ticket ${id} on the board`); return 2; }
+  const base = { id: t.id, title: t.title, why: t.why, refs: t.refs, group: t.group, authorizations: t.authorizations };
+  let next: Ticket;
+  if (cmd === 'close') {
+    if (t.status !== 'open' && t.status !== 'paused') { io.err(`${id} is ${t.status} — only an open or paused ticket closes`); return 1; }
+    const hash = cx.io.git('rev-parse', '--short', '--verify', '--quiet', `${v.commit}^{commit}`);
+    if (!hash.ok || !hash.out) { io.err(`commit ${v.commit} is not in this repository`); return 1; }
+    v.commit = hash.out;
+    next = { ...base, status: 'done', doneWhen: t.doneWhen, commit: hash.out } as Ticket;
+    let m;
+    try { m = metOf(next, cx); } catch (e) { io.err(`${id}: its done condition threw: ${(e as Error).message}`); return 1; }
+    if (m && !m.met) { io.err(`${id}: its done condition is not met${m.why ? ` (${m.why})` : ''} — it stays open`); return 1; }
+  } else {
+    if (t.status !== 'open') { io.err(`${id} is ${t.status} — ${cmd} edits an open ticket`); return 1; }
+    const o = t as Ticket & { status: 'open' };
+    if (cmd === 'block') {
+      const b = v.kind === 'external'
+        ? { kind: 'external', who: v.who, what: v.what, ...(v.recheck ? { recheck: v.recheck } : {}) }
+        : { kind: v.kind, ask: v.ask, since: today(now), ...(v.as ? { as: v.as } : {}) };
+      next = { ...o, blockers: [...(o.blockers ?? []), b], ...(v.wip ? { wip: v.wip } : {}), ...(v.step ? { next: v.step } : {}) } as Ticket;
+    } else {
+      const { wip: _w, ...rest } = o;
+      next = { ...(v['clear-wip'] ? rest : o), ...(v.wip ? { wip: v.wip } : {}), ...(v.step ? { next: v.step } : {}) } as Ticket;
+    }
+  }
+  const problem = await writeTicket(root, id, next, cx);
+  if (problem) { io.err(problem); return 1; }
+  if (json) emit({ written: id, ticket: next });
+  else io.out(`wrote ${id}: ${cmd === 'close' ? `done in ${v.commit}` : cmd === 'block' ? `${v.kind} blocker added` : 'updated'}`);
   return 0;
 }
 

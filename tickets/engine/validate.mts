@@ -3,23 +3,24 @@
 // the field. Prose caps are not checked here (they are `check` findings), so a migrated draft can
 // load while its prose still needs trimming.
 import type { Ctx, Problem, Ticket } from './types.mts';
-import { blockerProblems, doneKind, evalMembers } from './members.mts';
-import { windowProblems } from './windows.mts';
+import { authorizationNamesProblems, blockerProblems, doneKind, evalMembers, touchesProblems } from './members.mts';
+import { isDay, windowProblems } from './windows.mts';
 
-const STATUSES = ['open', 'blocked', 'paused', 'done', 'dropped'] as const;
+const STATUSES = ['open', 'paused', 'done', 'dropped'] as const;
+/** Read as `open` (status-blocked-deprecated); not offered in messages. */
+const LEGACY_BLOCKED = 'blocked';
 const COMMON_REQ = ['id', 'title', 'why', 'status'];
-const COMMON_OPT = ['refs', 'group'];
-const LIVE_OPT = ['wip', 'window', 'hazard', 'after'];
+const COMMON_OPT = ['refs', 'group', 'authorizations'];
+const LIVE_OPT = ['wip', 'window', 'hazard', 'after', 'blockers', 'touches'];
 const BY_STATUS: Record<string, { req: string[]; opt: string[] }> = {
   open: { req: ['doneWhen', 'next'], opt: LIVE_OPT },
-  blocked: { req: ['doneWhen', 'blockers', 'next'], opt: LIVE_OPT },
   paused: { req: ['doneWhen', 'until'], opt: ['wip'] },
   done: { req: ['doneWhen', 'commit'], opt: [] },
   dropped: { req: ['reason'], opt: [] },
 };
 const PROSE = ['title', 'why', 'next', 'until', 'reason', 'hazard', 'wip', 'commit', 'group'];
 const BUILTIN_DONE: Record<string, string[]> = { test: ['file', 'name'], answer: ['doc'], judgment: ['when'] };
-const CONFIG_KEYS = ['ids', 'doc', 'main', 'groups', 'boxes', 'resources', 'tests', 'caps', 'extensions', 'jev', 'claimStaleHours'];
+const CONFIG_KEYS = ['ids', 'doc', 'main', 'groups', 'boxes', 'resources', 'authorizations', 'tests', 'caps', 'extensions', 'jev', 'claimStaleHours'];
 const JEV_KEYS = ['tools', 'accept', 'flag', 'clear', 'review'];
 const REVIEW_KEYS = ['accept', 'clear', 'flag', 'confidence', 'weights'];
 const MATURITY_PARTS = ['spec_clear', 'done_checkable', 'next_evidenced', 'refs_present'];
@@ -43,6 +44,24 @@ export function configProblems(raw: unknown): string[] {
     else for (const [k, v] of Object.entries(raw.groups)) if (!nonEmpty(v)) out.push(`config.groups.${k}: the label must be a non-empty string`);
   }
   const boxes = raw.boxes;
+  if (raw.authorizations !== undefined) {
+    if (!isObj(raw.authorizations)) out.push('config.authorizations: must be { name: { what, ask, since, grant? } }');
+    else for (const [name, a] of Object.entries(raw.authorizations)) {
+      const at = `config.authorizations.${name}`;
+      if (!nonEmpty(name) || !isObj(a)) { out.push(`${at}: must have a non-empty name and an object definition`); continue; }
+      for (const k of Object.keys(a)) if (!['what', 'ask', 'since', 'grant'].includes(k)) out.push(`${at}: unknown key "${k}"`);
+      for (const k of ['what', 'ask']) if (!nonEmpty(a[k]) || a[k].length > 200) out.push(`${at}.${k}: must be a non-empty string of at most 200 characters`);
+      if (!isDay(a.since)) out.push(`${at}.since: must be a calendar day (YYYY-MM-DD)`);
+      if (a.grant !== undefined) {
+        if (!isObj(a.grant)) out.push(`${at}.grant: must be { source, quote }`);
+        else {
+          for (const k of Object.keys(a.grant)) if (!['source', 'quote'].includes(k)) out.push(`${at}.grant: unknown key "${k}"`);
+          for (const k of ['source', 'quote']) if (!nonEmpty(a.grant[k])) out.push(`${at}.grant.${k}: a non-empty string is required`);
+          if (nonEmpty(a.grant.source) && (/^(?:\/|[A-Za-z]:[\\/])/.test(a.grant.source) || a.grant.source.split(/[\\/]/).includes('..'))) out.push(`${at}.grant.source: must be a repo-relative path without ..`);
+        }
+      }
+    }
+  }
   if (boxes !== undefined && (!Array.isArray(boxes) || !boxes.every(nonEmpty) || new Set(boxes).size !== boxes.length)) out.push('config.boxes: must be a list of distinct names');
   if (raw.resources !== undefined) {
     if (!isObj(raw.resources)) out.push('config.resources: must be { name: { paths, on?, policy?, bringUp?, probe? } }');
@@ -139,11 +158,12 @@ export function boardProblems(raw: unknown, cx: Ctx): Problem[] {
     if (!isObj(t)) { err('a ticket must be an object'); return; }
     if (typeof t.id !== 'string' || !t.id) { err('id: a non-empty string is required'); return; }
     if (!cx.config.ids.test(t.id)) err(`id "${t.id}" does not match config.ids ${cx.config.ids}`);
-    const status = t.status;
+    const status = t.status === LEGACY_BLOCKED ? 'open' : t.status;
     if (typeof status !== 'string' || !(STATUSES as readonly string[]).includes(status)) {
-      err(`status: ${JSON.stringify(status)} is not one of ${STATUSES.join(', ')}`);
+      err(`status: ${JSON.stringify(t.status)} is not one of ${STATUSES.join(', ')}`);
       return;
     }
+    if (t.status === LEGACY_BLOCKED && t.blockers === undefined) err(`blockers: required for status blocked (read as open since 0.12.0 — write status: 'open')`);
     const spec = BY_STATUS[status];
     const allowed = [...COMMON_REQ, ...COMMON_OPT, ...spec.req, ...spec.opt];
     const done = t.doneWhen !== undefined ? doneProblems(t.doneWhen, cx) : [];
@@ -153,12 +173,14 @@ export function boardProblems(raw: unknown, cx: Ctx): Problem[] {
     for (const k of [...COMMON_REQ, ...spec.req]) if (t[k] === undefined && !optional(k)) err(`${k}: required for status ${status}`);
     for (const k of PROSE) if (t[k] !== undefined && !nonEmpty(t[k])) err(`${k}: must be a non-empty string`);
     if (t.refs !== undefined && (!Array.isArray(t.refs) || !t.refs.every(nonEmpty))) err('refs: must be a list of repo paths');
+    if (t.touches !== undefined) for (const m of touchesProblems(t.touches)) err(`touches: ${m}`);
+    for (const m of authorizationNamesProblems(t.authorizations, cx)) err(`authorizations: ${m}`);
     if (t.group !== undefined && nonEmpty(t.group) && !Object.prototype.hasOwnProperty.call(groups, t.group)) {
       err(`group "${t.group}" is not a key of config.groups${Object.keys(groups).length ? ` (${Object.keys(groups).join(', ')})` : ' (none configured)'}`);
     }
     for (const m of done) err(`doneWhen${m}`);
     if (t.blockers !== undefined) {
-      if (!Array.isArray(t.blockers) || !t.blockers.length) err('blockers: a blocked ticket needs at least one blocker (owner / go / external)');
+      if (!Array.isArray(t.blockers) || !t.blockers.length) err('blockers: list at least one blocker (owner / go / external), or leave the field out');
       else t.blockers.forEach((b, j) => { for (const m of blockerProblems(b)) err(`blockers[${j}]${m}`); });
     }
     if (t.window !== undefined) for (const m of windowProblems(t.window)) err(`window: ${m}`);
@@ -180,6 +202,19 @@ export function boardProblems(raw: unknown, cx: Ctx): Problem[] {
     }
   });
   return out;
+}
+
+/** The board as the engine reads it: a ticket written as `status: 'blocked'` (before 0.12.0) becomes
+ *  `open` with the same fields, and its id is listed for the deprecation warning. Run after boardProblems
+ *  finds no error. */
+export function normalizeBoard(raw: readonly unknown[]): { board: Ticket[]; legacyBlocked: string[] } {
+  const legacyBlocked: string[] = [];
+  const board = raw.map((t) => {
+    if (!isObj(t) || t.status !== LEGACY_BLOCKED) return t as Ticket;
+    legacyBlocked.push(t.id as string);
+    return { ...t, status: 'open' } as Ticket;
+  });
+  return { board, legacyBlocked };
 }
 
 /** Every string inside a ticket, with its path (`next`, `blockers[0].ask`, `doneWhen.when`). */

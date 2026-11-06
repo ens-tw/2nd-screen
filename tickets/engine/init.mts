@@ -69,6 +69,9 @@ export default {
   // resources: {                                        // key order = scarcity order
   //   bench: { on: 'pi', paths: ['docs/bench.md'], bringUp: 'how an agent brings it up', probe: probes.path('/dev/ttyAMA0') },
   // },
+  // authorizations: {                                  // shared standing grants; tickets name them in authorizations
+  //   flash: { what: 'Flash the test device', ask: 'Authorize flash writes?', since: '2026-11-04' },
+  // },                                                 // add grant: { source: 'AGENTS.md', quote: 'exact owner grant' } only after it is given
 } satisfies Config;
 `;
 }

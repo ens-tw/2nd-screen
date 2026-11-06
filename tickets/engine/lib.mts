@@ -54,6 +54,7 @@ export function resolveConfig(c: Config): Resolved {
     groups: c.groups ?? {},
     boxes: c.boxes ?? [],
     resources: c.resources ?? {},
+    authorizations: c.authorizations ?? {},
     tests: c.tests,
     caps: { ...CAPS, ...(c.caps ?? {}) },
     extensions: c.extensions ?? [],
@@ -103,7 +104,7 @@ export const outputDir = (root: string): string => {
  *  (re)write. Git-ignored, never committed, never read by an agent. */
 export const statusPagePath = (root: string): string => join(outputDir(root), 'board-status.html');
 
-export const isLive = (t: Ticket): boolean => t.status === 'open' || t.status === 'blocked';
+export const isLive = (t: Ticket): t is Extract<Ticket, { status: 'open' }> => t.status === 'open';
 export const isClosed = (t: Ticket): boolean => t.status === 'done' || t.status === 'dropped';
 export const byId = (b: Board): Map<string, Ticket> => new Map(b.map((t) => [t.id, t]));
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
@@ -122,9 +123,29 @@ const claimHold = (cx: Ctx, ticket: string, member?: string): Hold[] => {
 /** A ref without its `#anchor` / ` §x` suffix. */
 export const refPath = (ref: string): string => ref.split(/#| §/)[0];
 
+export function authorizationOf(name: string, cx: Ctx) {
+  const a = cx.config.authorizations[name];
+  const grant = a?.grant;
+  const path = grant ? refPath(grant.source) : '';
+  const valid = !!grant && cx.io.exists(path) && cx.io.read(path).includes(grant.quote)
+    && (!cx.io.hasGit || cx.io.git('ls-files', '--error-unmatch', '--', path).ok);
+  return { name, what: a?.what ?? name, state: !a ? 'unknown' : !grant ? 'pending' : valid ? 'granted' : 'invalid', grant: grant ?? null };
+}
+
+export const authorizationsOf = (t: { authorizations?: string[] }, cx: Ctx) =>
+  (t.authorizations ?? []).map((name) => authorizationOf(name, cx));
+
+function authorizationHolds(t: { authorizations?: string[] }, cx: Ctx): Hold[] {
+  return authorizationsOf(t, cx).flatMap((a): Hold[] => {
+    if (a.state === 'granted') return [];
+    const def = cx.config.authorizations[a.name];
+    return [{ kind: 'authorization', needs: a.name, ask: def?.ask ?? `Define authorization ${a.name}`, since: def?.since ?? '1970-01-01', via: 'authorizations' }];
+  });
+}
+
 /** Resources a list of refs needs: one of them lies under the resource's paths
  *  (a path ending in `/` is a folder prefix, anything else must match exactly). */
-function refNeeds(refs: readonly string[], cx: Ctx): { needs: string; via: string }[] {
+export function refNeeds(refs: readonly string[], cx: Ctx): { needs: string; via: string }[] {
   const under = (p: string, q: string) => (q.endsWith('/') ? p.startsWith(q) : p === q);
   return Object.entries(cx.config.resources).flatMap(([name, r]) => {
     const ref = refs.find((x) => r.paths.some((q) => under(refPath(x), q)));
@@ -157,11 +178,12 @@ function afterHolds(t: Ticket, b: Board, cx: Ctx): Hold[] {
 export function holdsOf(id: string, b: Board, cx: Ctx): Hold[] {
   const t = byId(b).get(id);
   if (!t || !isLive(t)) return [];
-  const blockers: Hold[] = t.status === 'blocked' ? [...t.blockers] : [];
-  const win: Hold[] = t.status === 'open' || t.status === 'blocked' ? (t.window ? [{ kind: 'window', ...t.window }] : []) : [];
+  const blockers: Hold[] = [...(t.blockers ?? [])];
+  const win: Hold[] = t.window ? [{ kind: 'window', ...t.window }] : [];
   const all: Hold[] = [
     ...claimHold(cx, t.id),
     ...blockers,
+    ...authorizationHolds(t, cx),
     ...win,
     ...needs(t, cx).map((n): Hold => ({ kind: 'resource', ...n })),
     ...afterHolds(t, b, cx),
@@ -178,7 +200,7 @@ export function holdsOf(id: string, b: Board, cx: Ctx): Hold[] {
 
 // ── members ─────────────────────────────────────────────────────────────────────────────────────
 // An unmet member's holds: its own (owner / go / external, a window, a resource, a ticket), a resource
-// for each of its refs under a resource's paths, and the ticket that covers it — another open, blocked
+// for each of its refs under a resource's paths, and the ticket that covers it — another open
 // or paused ticket whose done condition reports the same member id and is more specific (fewer members;
 // on a tie, earlier on the board). An umbrella's member that a specific ticket carries so waits on that
 // ticket instead of being offered twice, and the strict order rules out a cycle.
@@ -199,7 +221,7 @@ const cached = <V>(store: WeakMap<Ctx, WeakMap<Board, V>>, cx: Ctx, b: Board, ma
   return per.get(b)!;
 };
 
-/** Member id → the open, blocked or paused tickets whose done condition reports it, with how specific
+/** Member id → the open or paused tickets whose done condition reports it, with how specific
  *  each is (member count, board position). */
 const coverMap = (b: Board, cx: Ctx) => cached(coverCache, cx, b, () => {
   const out = new Map<string, { id: string; rank: [number, number] }[]>();
@@ -214,11 +236,11 @@ const coverMap = (b: Board, cx: Ctx) => cached(coverCache, cx, b, () => {
 
 const ahead = (x: [number, number], y: [number, number]) => x[0] < y[0] || (x[0] === y[0] && x[1] < y[1]);
 
-/** The open, blocked or paused tickets whose done condition reports member `id`. */
+/** The open or paused tickets whose done condition reports member `id`. */
 export const reportersOf = (id: string, b: Board, cx: Ctx): string[] => (coverMap(b, cx).get(id) ?? []).map((c) => c.id);
 
 /** A ticket's members, or undefined when its done condition reports none. Paused, done and dropped
- *  tickets report theirs too (`show`), but only an open or blocked ticket is worked by them. */
+ *  tickets report theirs too (`show`), but only an open ticket is worked by them. */
 export function membersOf(id: string, b: Board, cx: Ctx): MembersAt | undefined {
   const per = cached(memberCache, cx, b, () => new Map<string, MembersAt | null>());
   if (per.has(id)) return per.get(id) ?? undefined;
@@ -234,6 +256,7 @@ export function membersOf(id: string, b: Board, cx: Ctx): MembersAt | undefined 
       const all: Hold[] = [
         ...claimHold(cx, id, m.id),
         ...(m.holds ?? []),
+        ...authorizationHolds(m, cx),
         ...refNeeds(refs, cx).map((n): Hold => ({ kind: 'resource', ...n })),
         ...(cover ? [{ kind: 'ticket', id: cover.id, via: 'covering ticket' } as Hold] : []),
       ];
@@ -262,13 +285,14 @@ const liveMembers = (b: Board, cx: Ctx): { t: Ticket; m: MemberAt }[] =>
  *  ticket that covers it, the owner, a go, a third party, a resource, a window. '' = none stands. */
 export function memberLabel(m: MemberAt, stand: (h: Hold) => boolean = () => true): string {
   const hs = m.holds.filter(stand);
-  for (const k of ['claim', 'ticket', 'owner', 'go', 'external', 'resource', 'window'] as const) {
+  for (const k of ['claim', 'ticket', 'owner', 'go', 'authorization', 'external', 'resource', 'window'] as const) {
     const h = hs.find((x) => x.kind === k);
     if (!h) continue;
     if (h.kind === 'claim') return 'claimed';
     if (h.kind === 'ticket') return `in ${h.id}`;
     if (h.kind === 'external') return `external (${h.who})`;
     if (h.kind === 'resource') return `needs ${h.needs}`;
+    if (h.kind === 'authorization') return `authorization (${h.needs})`;
     if (h.kind === 'window') return `window (${h.what})`;
     return h.kind;
   }
@@ -294,7 +318,7 @@ export function memberSummary(ms: MembersAt, b: Board, live?: { reachable: Reado
  *  An external blocker stops being a hold on its `recheck` day: an agent re-checks then. */
 export function stands(h: Hold, b: Board, reachable: ReadonlySet<string>, now: number = Date.now()): boolean {
   switch (h.kind) {
-    case 'owner': case 'go': case 'claim': return true;
+    case 'owner': case 'go': case 'authorization': case 'claim': return true;
     case 'external': return !(h.recheck && h.recheck <= today(now));
     case 'window': return !isOpen(h, now);
     case 'resource': return !reachable.has(h.needs);
@@ -398,7 +422,7 @@ export function windowGates(b: Board, now: number = Date.now(), cx?: Ctx): { id:
     return [{ id, ...(member ? { member } : {}), what: w.what, opens: n?.iso ?? 'never within a year — check the rule', rule: describeWindow(w), ms: n?.ms ?? Infinity }];
   };
   return [
-    ...b.flatMap((t) => (t.status === 'open' || t.status === 'blocked') && t.window ? gate(t.id, t.window) : []),
+    ...b.flatMap((t) => isLive(t) && t.window ? gate(t.id, t.window) : []),
     ...(cx ? liveMembers(b, cx).flatMap(({ t, m }) => m.holds.flatMap((h) => (h.kind === 'window' ? gate(t.id, h, m.id) : []))) : []),
   ].sort((x, y) => x.ms - y.ms).map(({ ms: _, ...g }) => g);
 }
@@ -418,16 +442,20 @@ export function resourceBringUps(b: Board, probes: ReadonlyMap<string, Probe>, c
 export const daysSince = (day: Day, now: number = Date.now()): number =>
   Math.round((dayStart(today(now)) - dayStart(day)) / 86_400_000);
 
-/** Blockers of `kind` on blocked tickets, and — given `cx` — on the unmet members of live tickets. */
+/** Blockers of `kind` on live tickets, and — given `cx` — on their unmet members. */
 const blockersOf = <K extends Blocker['kind']>(b: Board, kind: K, cx?: Ctx): { id: string; member?: string; bl: Extract<Blocker, { kind: K }> }[] => [
-  ...b.flatMap((t) => (t.status !== 'blocked' ? [] : t.blockers.flatMap((bl: Blocker) => (bl.kind === kind ? [{ id: t.id, bl: bl as Extract<Blocker, { kind: K }> }] : [])))),
+  ...b.flatMap((t) => (!isLive(t) ? [] : (t.blockers ?? []).flatMap((bl: Blocker) => (bl.kind === kind ? [{ id: t.id, bl: bl as Extract<Blocker, { kind: K }> }] : [])))),
   ...(cx ? liveMembers(b, cx).flatMap(({ t, m }) => m.holds.flatMap((h) => (h.kind === kind ? [{ id: t.id, member: m.id, bl: h as Extract<Blocker, { kind: K }> }] : []))) : []),
 ];
 
-/** Owner asks (`owner`) or owner go asks (`go`) on blocked tickets — and, given `cx`, on members —
+/** Owner asks (`owner`) or owner go asks (`go`) on live tickets — and, given `cx`, on members —
  *  longest wait first. */
-export function waits(b: Board, kind: 'owner' | 'go', now: number = Date.now(), cx?: Ctx): { id: string; member?: string; ask: string; since: Day; days: number }[] {
-  return blockersOf(b, kind, cx).map(({ id, member, bl }) => ({ id, ...(member ? { member } : {}), ask: bl.ask, since: bl.since, days: daysSince(bl.since, now) }))
+export function waits(b: Board, kind: 'owner' | 'go', now: number = Date.now(), cx?: Ctx): { id: string; member?: string; authorization?: string; ask: string; since: Day; days: number }[] {
+  const derived = kind === 'go' && cx ? [
+    ...b.filter(isLive).flatMap((t) => holdsOf(t.id, b, cx).map((h) => ({ id: t.id, h }))),
+    ...liveMembers(b, cx).flatMap(({ t, m }) => m.holds.map((h) => ({ id: t.id, member: m.id, h }))),
+  ].flatMap(({ id, h, ...rest }) => h.kind === 'authorization' ? [{ id, ...rest, authorization: h.needs, ask: h.ask, since: h.since, days: daysSince(h.since, now) }] : []) : [];
+  return [...blockersOf(b, kind, cx).map(({ id, member, bl }) => ({ id, ...(member ? { member } : {}), ask: bl.ask, since: bl.since, days: daysSince(bl.since, now) })), ...derived]
     .sort((x, y) => x.since.localeCompare(y.since));
 }
 
@@ -570,6 +598,7 @@ export function describeHold(h: Hold): string {
   switch (h.kind) {
     case 'owner': return `owner, since ${h.since} — ${h.ask}`;
     case 'go': return `owner go needed, since ${h.since} — ${h.ask}`;
+    case 'authorization': return `needs authorization ${h.needs}, since ${h.since} — ${h.ask} (← ${h.via})`;
     case 'external': return `external: ${h.who} — ${h.what}${h.recheck ? ` (recheck ${h.recheck})` : ''}`;
     case 'window': return `in-window only — ${describeWindow(h)}`;
     case 'resource': return `needs ${h.needs} (← ${h.via})`;
@@ -628,7 +657,7 @@ export function stopOf(b: Board, reachable: ReadonlySet<string>, cx: Ctx, now: n
   const classified = held.filter((hs) => hs.some((h) => h.kind !== 'ticket'));
   if (!classified.length) return { code: 'needs-human' };
   const gates = (hs: Hold[]) => hs.filter((h) => h.kind !== 'ticket' && !isClock(h, now));
-  if (classified.every((hs) => { const g = gates(hs); return g.length > 0 && g.every((h) => h.kind === 'go'); })) {
+  if (classified.every((hs) => { const g = gates(hs); return g.length > 0 && g.every((h) => h.kind === 'go' || h.kind === 'authorization'); })) {
     return { code: 'needs-authorization' };
   }
   let soonest: { ms: number; iso: string } | undefined;

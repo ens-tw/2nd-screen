@@ -3,14 +3,14 @@
 // never committed. The board is tickets/board.mts and agents read it through the CLI's JSON — the page
 // says so at its top, in a comment and a banner, so an agent that opens it anyway is told to stop. It
 // shows what the
-// Markdown view repos used to commit showed, plus each member summary: open and blocked tickets in
+// Markdown view repos used to commit showed, plus each member summary: open tickets in
 // priority order with their holds (derived ones marked ←), hazard, next or members, wip, done condition
 // and what they unblock; the resources and who waits on each; the done-by-judgment list; paused tickets
 // by what resumes them; the done/dropped count. Deterministic for a board and its stamp (version, commit,
 // time — passed in): it reads the board, the config and repo files only — no clock, no probe, every
 // hold counts.
 import type { Board, Ctx, Ticket } from './types.mts';
-import { dependents, describeDone, describeHolds, holdsOf, isClosed, isLive, memberLabel, memberSummary, membersOf } from './lib.mts';
+import { authorizationsOf, dependents, describeDone, describeHolds, holdsOf, isClosed, isLive, memberLabel, memberSummary, membersOf } from './lib.mts';
 
 /** The markers of the Markdown view a repo committed before 0.5.0. `check` warns while a doc still holds
  *  the block between them (view-doc-leftover): delete it — there is no committed view any more. */
@@ -41,12 +41,13 @@ ol, ul { padding-left: 1.25rem; } li { margin: 0 0 .9rem; }
 `;
 
 function item(t: Ticket, b: Board, cx: Ctx, deps: Map<string, string[]>): string {
-  if (t.status !== 'open' && t.status !== 'blocked') return '';
+  if (!isLive(t)) return '';
   const hs = holdsOf(t.id, b, cx);
   const ms = membersOf(t.id, b, cx);
-  const rows = [`<div><span class="id">${esc(t.id)}</span> ${esc(t.title)} <span class="st">${t.status}</span></div>`];
+  const rows = [`<div><span class="id">${esc(t.id)}</span> ${esc(t.title)} <span class="st">${hs.length ? 'held' : 'open'}</span></div>`];
   if (hs.length) rows.push(`<div class="holds">${describeHolds(hs).map(esc).join('<br>')}</div>`);
   if (t.hazard) rows.push(`<div class="hazard">⚠ ${esc(t.hazard)}</div>`);
+  for (const a of authorizationsOf(t, cx)) rows.push(`<div>Authorization <b>${esc(a.name)}</b>: ${esc(a.state)} — ${esc(a.what)}${a.grant ? ` (${esc(a.grant.source)}: ${esc(a.grant.quote)})` : ''}</div>`);
   if (ms) {
     rows.push(`<div><b>Members:</b> ${esc(memberSummary(ms, b))}</div>`);
     if (ms.unmet.length) {
@@ -80,8 +81,8 @@ export function renderHtml(b: Board, cx: Ctx, o: { name: string; version: string
     `<title>${esc(o.name)} — tickets</title>`, `<style>${CSS}</style>`, '</head>', '<body>',
     `<div class="banner" role="note">${esc(notice).replace(/`([^`]+)`/g, '<code>$1</code>')}</div>`,
     `<h1>${esc(o.name)} — tickets</h1>`,
-    `<p>${count('open')} open · ${count('blocked')} blocked · ${count('paused')} paused · ${count('done')} done · ${count('dropped')} dropped</p>`,
-    '<h2>Open and blocked, in priority order</h2>', '<p class="dim">Holds marked ← are derived, not written.</p>',
+    `<p>${count('open')} open (${live.filter((t) => holdsOf(t.id, b, cx).length).length} held) · ${count('paused')} paused · ${count('done')} done · ${count('dropped')} dropped</p>`,
+    '<h2>Open, in priority order</h2>', '<p class="dim">Holds marked ← are derived, not written.</p>',
   ];
   const list = (ts: Ticket[]) => ['<ol>', ...ts.map((t) => item(t, b, cx, deps)), '</ol>'];
   if (!live.length) out.push('<p><i>Nothing open.</i></p>');

@@ -8,7 +8,7 @@
 // here with the same rules a board's blockers and windows are. This module reads the done kind's answer
 // only; the board-level derivations (resources from refs, the ticket that covers a member, what is
 // workable, the stop code, the summary) live in lib.mts.
-import type { Ctx, DoneKind, Member, Ticket } from './types.mts';
+import type { Ctx, DoneKind, Member, OwnerAs, Ticket } from './types.mts';
 import { isDay, windowProblems } from './windows.mts';
 
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
@@ -22,9 +22,11 @@ export const doneKind = (kind: string, cx: Ctx): DoneKind | undefined => {
 };
 
 /** Shape problems of one blocker (owner / go / external), each starting with `: ` or `.field: `. */
+export const OWNER_AS: readonly OwnerAs[] = ['hands', 'decision', 'errand'];
+
 export function blockerProblems(b: unknown): string[] {
   if (!isObj(b)) return [': must be { kind: owner | go | external, … }'];
-  const allowed: Record<string, string[]> = { owner: ['ask', 'since'], go: ['ask', 'since'], external: ['who', 'what', 'recheck'] };
+  const allowed: Record<string, string[]> = { owner: ['ask', 'since', 'as'], go: ['ask', 'since'], external: ['who', 'what', 'recheck'] };
   const kind = b.kind;
   if (typeof kind !== 'string' || !allowed[kind]) return [`.kind: ${JSON.stringify(kind)} is not owner, go or external`];
   const out: string[] = [];
@@ -35,6 +37,7 @@ export function blockerProblems(b: unknown): string[] {
   } else {
     if (!nonEmpty(b.ask)) out.push('.ask: a non-empty string is required');
     if (!isDay(b.since)) out.push(`.since: ${JSON.stringify(b.since)} is not a calendar day (YYYY-MM-DD) — the day it was first asked`);
+    if (kind === 'owner' && b.as !== undefined && !(OWNER_AS as readonly unknown[]).includes(b.as)) out.push(`.as: ${JSON.stringify(b.as)} is not ${OWNER_AS.join(', ')}`);
   }
   return out;
 }
@@ -69,7 +72,27 @@ export function holdProblems(h: unknown, cx: Ctx): string[] {
   }
 }
 
-const MEMBER_KEYS = ['id', 'met', 'holds', 'refs', 'note'];
+export function authorizationNamesProblems(names: unknown, cx: Ctx): string[] {
+  if (names === undefined) return [];
+  if (!Array.isArray(names) || !names.length || !names.every(nonEmpty)) return ['must be a non-empty list of authorization names'];
+  const out = new Set(names).size === names.length ? [] : ['a name is listed twice'];
+  for (const n of names) if (!own(cx.config.authorizations, n)) out.push(`"${n}" is not a key of config.authorizations`);
+  return out;
+}
+
+/** Problems of a `touches` list (ticket or member), each a complete sentence fragment. */
+export function touchesProblems(v: unknown): string[] {
+  if (!Array.isArray(v)) return ['must be a list of repo paths or @names ([] = the work changes no repo file)'];
+  const out: string[] = [];
+  for (const x of v) {
+    if (typeof x !== 'string' || !x.trim()) { out.push('every entry must be a non-empty string'); continue; }
+    if (x.startsWith('@') ? !/^@[\w.:-]+$/.test(x) : x.startsWith('/') || x.split('/').includes('..')) out.push(`"${x}" is neither a repo path nor an @name`);
+  }
+  if (new Set(v).size !== v.length) out.push('an entry is listed twice');
+  return out;
+}
+
+const MEMBER_KEYS = ['id', 'met', 'holds', 'refs', 'note', 'authorizations', 'touches'];
 
 /** Shape problems of one reported member, each starting with `: ` or `.field: `. */
 function memberShape(m: unknown, cx: Ctx): string[] {
@@ -79,7 +102,9 @@ function memberShape(m: unknown, cx: Ctx): string[] {
   if (!nonEmpty(m.id)) out.push('.id: a non-empty string is required');
   if (typeof m.met !== 'boolean') out.push('.met: must be true or false');
   if (m.note !== undefined && !nonEmpty(m.note)) out.push('.note: must be a non-empty string');
+  for (const p of authorizationNamesProblems(m.authorizations, cx)) out.push(`.authorizations: ${p}`);
   if (m.refs !== undefined && (!Array.isArray(m.refs) || !m.refs.every(nonEmpty))) out.push('.refs: must be a list of repo paths');
+  if (m.touches !== undefined) for (const p of touchesProblems(m.touches)) out.push(`.touches: ${p}`);
   if (m.holds !== undefined) {
     if (!Array.isArray(m.holds)) out.push('.holds: must be a list of holds');
     else m.holds.forEach((h, i) => { for (const p of holdProblems(h, cx)) out.push(`.holds[${i}]${p}`); });

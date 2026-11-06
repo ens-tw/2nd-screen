@@ -5,7 +5,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import type { Board, Claim, Ctx, Io, Met, Problem, TestDone, Ticket } from './types.mts';
 import { relative } from 'node:path';
-import { byId, cycles, doneKind, evalCoverage, isLive, membersOf, refPath, reportersOf, statusPagePath } from './lib.mts';
+import { authorizationOf, byId, cycles, doneKind, evalCoverage, isLive, membersOf, refPath, reportersOf, statusPagePath } from './lib.mts';
 import { evalMembers } from './members.mts';
 import { hasMarkers } from './render.mts';
 import { isRecurring, today } from './windows.mts';
@@ -36,14 +36,14 @@ export function capProblems(b: Board, cx: Ctx): Problem[] {
   const out: Problem[] = [];
   for (const t of b) {
     const fields: [keyof typeof caps, string, string][] = [['title', 'title', t.title], ['why', 'why', t.why]];
-    if (t.status === 'open' || t.status === 'blocked') {
+    if (isLive(t)) {
       fields.push(['next', 'next', t.next]);
       if (t.window) fields.push(['window', 'window.what', t.window.what]);
       if (t.hazard) fields.push(['hazard', 'hazard', t.hazard]);
     }
     if (t.status === 'paused') fields.push(['until', 'until', t.until]);
     if (t.status === 'dropped') fields.push(['reason', 'reason', t.reason]);
-    if (t.status === 'blocked') t.blockers.forEach((bl, i) => {
+    if (isLive(t)) (t.blockers ?? []).forEach((bl, i) => {
       if (bl.kind === 'external') fields.push(['what', `blockers[${i}].what`, bl.what]);
       else fields.push(['ask', `blockers[${i}].ask`, bl.ask]);
     });
@@ -160,7 +160,7 @@ export function doneStateProblems(b: Board, cx: Ctx): Problem[] {
  *  disagreeing with the members are errors. Two warnings keep an umbrella honest:
  *    next-overridden-by-members — a hand-written `next` on a live ticket with members: `next`, `show` and
  *      the view print the generated summary instead, so the line can only go stale; drop it.
- *    member-uncovered — unmet members of a live ticket with no hold at all, that no other open, blocked
+ *    member-uncovered — unmet members of a live ticket with no hold at all, that no other open
  *      or paused ticket's done condition names: nothing records what stands between them and work. Any
  *      hold counts, a window too — the finding reads no clock and no probe, so it stays one answer per
  *      commit. */
@@ -206,7 +206,7 @@ export function memberProblems(b: Board, cx: Ctx): Problem[] {
  *      the first.
  *    coverage-uncovered — unmet units with no carrier: nothing on the board says who raises them.
  *    coverage-carrier — unmet units whose carrier is not on the board, or is done or dropped (a live
- *      carrier is open, blocked or paused); one finding per carrier. */
+ *      carrier is open or paused); one finding per carrier. */
 export function coverageProblems(b: Board, cx: Ctx): Problem[] {
   const ev = evalCoverage(cx);
   const out: Problem[] = [
@@ -262,11 +262,11 @@ export function clockProblems(b: Board, now: number = Date.now()): Problem[] {
   const out: Problem[] = [];
   const day = today(now);
   for (const t of b) {
-    if (t.status === 'blocked') for (const bl of t.blockers) {
+    if (isLive(t)) for (const bl of t.blockers ?? []) {
       if ((bl.kind === 'owner' || bl.kind === 'go') && bl.since > day) out.push(warn(`${bl.kind} blocker since ${bl.since} is in the future — the day it was first asked`, t.id));
       if (bl.kind === 'external' && bl.recheck && bl.recheck <= day) out.push(warn(`recheck day ${bl.recheck} for ${bl.who} has come — re-check, then update or remove the blocker`, t.id));
     }
-    if ((t.status === 'open' || t.status === 'blocked') && t.window && !isRecurring(t.window)) {
+    if (isLive(t) && t.window && !isRecurring(t.window)) {
       const opened = Date.parse(t.window.opens);
       if (now - opened > 86_400_000) out.push(warn(`window opened ${t.window.opens}, more than 24 h ago — it is workable; drop the window or set the next one`, t.id));
     }
@@ -292,14 +292,14 @@ export function afterProblems(b: Board, cx: Ctx): Problem[] {
   return out;
 }
 
-/** `jev-blocker-mismatch`: Jev answers saved for a blocked ticket (`jev route blocker --save`) say a
+/** `jev-blocker-mismatch`: Jev answers saved for a live ticket's blockers (`jev route blocker --save`) say a
  *  blocker does not read as written, or sit in the mid band. Only when an answers file exists, and only
  *  for a blocker whose text is still the one judged (its fingerprint) — a warning, never an error: the
  *  exit code stays a function of the commit, and the answers file never decides anything by itself. */
 export function jevProblems(b: Board, cx: Ctx): Problem[] {
   const out: Problem[] = [];
   for (const t of b) {
-    if (t.status !== 'blocked') continue;
+    if (!isLive(t) || !t.blockers) continue;
     const path = answersPath(t.id);
     const text = cx.io.read(path);
     if (!text) continue;
@@ -373,8 +373,15 @@ export function viewDocProblems(cx: Ctx): Problem[] {
 }
 
 /** Every check, in a stable order. The board must already validate. */
+/** `status-blocked-deprecated`: a board written before 0.12.0 still says `status: 'blocked'`. Load reads
+ *  it as `open` with the same blockers, so this stays a warning until the board is edited. */
+export function legacyStatusProblems(cx: Ctx): Problem[] {
+  return (cx.legacyBlocked ?? []).map((id) => warn(`status-blocked-deprecated: status 'blocked' is read as 'open' since 0.12.0 — whether a ticket is held comes from its holds; write status: 'open' and keep the blockers`, id));
+}
+
 export function runChecks(b: Board, cx: Ctx, opts: CheckOptions = {}): Problem[] {
   return [
+    ...authorizationProblems(cx),
     ...capProblems(b, cx),
     ...refProblems(b, cx),
     ...resourceProblems(cx),
@@ -388,6 +395,13 @@ export function runChecks(b: Board, cx: Ctx, opts: CheckOptions = {}): Problem[]
     ...jevProblems(b, cx),
     ...engineProblems(cx, opts),
     ...viewDocProblems(cx),
+    ...legacyStatusProblems(cx),
     ...(opts.claims ? claimProblems(b, cx, opts.claims, opts.now ?? Date.now()) : []),
   ];
+}
+
+export function authorizationProblems(cx: Ctx): Problem[] {
+  return Object.entries(cx.config.authorizations).flatMap(([name, a]) =>
+    authorizationOf(name, cx).state === 'invalid'
+      ? [err(`authorization-grant: ${name}: source ${a.grant!.source} must exist, be tracked in a git repo, and contain the exact grant quote`)] : []);
 }
