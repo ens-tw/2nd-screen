@@ -1,0 +1,141 @@
+---
+format:
+  pdf:
+    pdf-engine: xelatex
+    include-in-header:
+      - _preamble.tex
+    documentclass: article
+    geometry:
+      - margin=2.5cm
+    colorlinks: true
+    linkcolor: black
+    urlcolor: blue
+    citecolor: black
+---
+
+<!-- 這是 talk.json 宣告的 Model：全場唯一放「主張」的地方。points.md 與 storyboard.md 只能從這裡挑，不新增主張。
+     事實標記沿用 2nd-screen repo 的規範：[證實]（有證據路徑）、[推測]（有理由、未驗證）、[待驗證]／[待研究]。
+     DC 電表讀值不當數位訊號振幅；擷取成功不等於電氣規格已驗證。
+     來源：
+       - 研究（二）：evidence/joegrand-hardwear-io-2026-slides.md（投影片逐頁；標 [S p.N]）、
+         evidence/video/*.vtt.txt（Hardwear.io / TROPICON 講稿）。
+       - 復刻與第二螢幕（三、四、五）：../docs/2nd-screen.md、../README.md、../AGENTS.md、../poc/*。
+       - 新聞（一）：待背景研究補齊，來源 URL 逐條附上。
+       - OSINT（一、六）：evidence/osint/*（日期-來源-機型）。
+     evidence/ 不進 git（.gitignore），原始檔只在本機 ~/cbx/ledger-supply-chain/evidence/；
+     簡報用到的照片、投影片頁與影片都已複製進 talk/media/，所以 deck 自足。 -->
+
+# 導言
+
+這場簡報回答一個問題：**當一個世界級硬體駭客花數週逆向出來的攻擊，AI 協作能讓一個人幾天內復刻其核心手法時，攻防兩端各自被改變了什麼？** 範圍限定在一條具體的攻擊鏈——Ledger Nano X 硬體植入「偷看螢幕」的那一段——以及我（JZ）用 Feather RP2040 做出的**被動顯示鏡像**復刻。終點落在 CoolWallet 的防禦意涵。
+
+全程守一條線：研究者的植入是**主動植入、具外洩能力**；我的第二螢幕是**被動、只讀、不回寫**，且主動回寫路線已於 2026-11-02 由我自己決定移除（[證實]：../AGENTS.md、commit `5e7149b`）。這條線是整場簡報的倫理骨架，不可模糊。
+
+# 一、新聞：2026-10 Ledger 硬體植入事件
+
+來源骨架來自 Karpelès Lab / Tibane 的公開 OSINT 追蹤器（本機 evidence/osint/ 即其鏡像；karpeleslab.github.io/ledger_implant_osint），各條另附一手來源。事實分級：[Ledger 證實]／[媒體報導]／[社群宣稱]／[待驗證]。
+
+- [Ledger 證實] 2026-10-10，Ledger 證實「一名受影響使用者的裝置內含未授權硬體植入」（x.com/ledger_support，status 2108968264055345381）。2026-10-13 進一步說明：植入**在設定階段從螢幕讀取 24 字恢復助記詞**，**不改動安全元件、OS 或交易簽章**，再**經 eSIM 以 LTE 外送**（x.com/Ledger，status 2109896739985453358）。
+- [媒體報導] 遭竊金額 Ledger 未給總額；外部估計分歧：Specter 逾 **$86M**（Decrypt, 10-09）；Bitquery $93.2M／315 錢包、YFarmX $94.5M→後稱 $103M（CoinDesk 10-12、Cointelegraph）；Tether 已凍結約 $10M USDT。
+- [媒體報導／Ledger 證實] 共同向量是東南亞經銷商 **CryptoBilis**：Ledger 於 2026-10-09 要求其暫停銷售、並要近 90 天買家**先別設定裝置**；10-13 要求印尼、新加坡、泰國、菲律賓、越南、馬來西亞、香港經銷商下架，稱「唯一已確認事件仍限於東南亞」（x.com/Ledger，status 2110129361382994076）。
+- [Ledger 證實／媒體報導] **Genuine Check 會過**——因為安全元件是真的；Ledger 自己警告 Genuine Check 無法偵測「加裝的」植入（BleepingComputer）。這是對使用者最反直覺、也最關鍵的一點。
+- [媒體報導] Grand 的樣本被 Tibane 標為「**Generation 1 · prototype**」；10 月批次手法相同（旁聽螢幕→讀字→行動網路外送）但隱藏更好，較新單位改用 **Nordic nRF9151**（LTE-M／NB-IoT）取代 Grand 樣本的 Luat Air700E（Tibane；Zetter 2026-10-13）。韌體資料指向命令伺服器在香港（Zetter）。
+- [媒體報導] 連鎖反應：MediaMarkt Saturn 於 2026-10-13 在德國一名顧客回報後停售 Ledger；CryptoBilis 關閉門市、停售；Trezor 終止與其合作，OneKey 撤銷並提供免費更換。Ledger CEO Pascal Gauthier 稱攻擊者為「高度組織化的犯罪集團」（10-15）。
+- [社群宣稱] 最早把 10 月批次與 Grand 研究連起來的是 Karpelès 2026-09-16 貼文（x.com/MagicalTux，status 2100131628815405511）；Gauthier 與 Karpelès 另有口水（Gauthier 稱其「no white knight」，Karpelès 稱 Ledger 三月就知情）。
+- [待驗證] 確認裝置總數、受害者數、歐洲（MediaMarkt）與俄羅斯單位是否同屬 CryptoBilis、是否有逮捕。追蹤器列 17 筆：13 筆確認植入（含 Grand Gen 1）、2 筆仿冒、1 筆待查、1 筆經銷商待證。
+
+[關鍵數字，本場唯一 M-SCRAMBLE，作者定案 2026-11-11] `$86M+`——Specter 的遭竊估計（Decrypt 2026-10-09），是較保守、較早、且直接連到 Ledger 調查的數字；上台時說明其他估計為 $93M–$103M，Ledger 未公布總額。
+
+# 二、研究：Joe Grand 如何逆向這個植入
+
+Joe Grand（aka Kingpin）在 **Hardwear.io USA 2026**（Santa Clara，2026-05-26～30；投影片 2026-05-29 定稿）發表〈Reverse Engineering a Ledger Nano X Hardware Implant〉，另於 TROPICON 2026 講過（[媒體報導] Zetter）。起點是 **2025-08** Reddit 一則「有人在賣會偷你加密貨幣的 Nano X」貼文（[S p.4]）；他從 **Lazada 泰國**掛「授權經銷」的賣場**買了 8 支，其中 4 支有植入**（[媒體報導] Zetter；[S p.19–21]）。他於 2026-03-04 把問題通報 Ledger（[媒體報導] Zetter），並於 2026-07-20 在 X 公開講稿影片與韌體。
+
+## SP1：縮小電池，騰出植入空間
+
+[證實：S p.33、sp1.png] 正面改動的核心是**換上更小的電池**來騰出空間：原廠電池被換成容量較小的 Li-Po（樣本上印 `XYT 261626 70mAh 3.7V 0.259Wh`，對照一顆標準 `100mAh 0.37Wh` 電池明顯更小）。配套改動：以固定 10kΩ 電阻取代原電池的 NTC 熱敏電阻；旁路電量計電阻，讓電量永遠顯示 100%（[S p.33]）。**要義**：植入不是外掛盒子，而是吃掉裝置內部的物理餘裕，從外觀與開機自檢都不易察覺。
+
+## SP2：植入的位置
+
+[證實：S p.34–36、sp2.png] 植入電路做在裝置**背面**，塞進縮小電池讓出的腔體；關鍵一句在 [S p.36]：**植入搭在 OLED 的 SPI 介面上**（「OLED SPI INTERFACE IMPLANT MCU」）。也就是說，植入不去碰安全元件（Secure Element）本身，而是**旁聽控制器送往螢幕的那條線**。
+
+## SP3：植入的接線與零件
+
+[證實：S p.36–66、sp3.png] 植入是一塊獨立小板，內含：
+
+- **MCU**：ARM Cortex-M0+，QFN-20、3×3mm、無零件標記（[S p.49–51]）。
+- **行動網路模組**：Luat Air700E / EiGENCOMM EC716S，Cat.1bis LTE（[S p.44–48]）；就是**外洩資料用的 4G 通道**。
+- **eSIM**：MFF2（DFN-8）封裝；pySIM 讀出 IMSI 為 MCC 204 / MNC 04（荷蘭 Vodafone）、SPN 標「DATA ONLY」——一張漫遊資料卡（[S p.57–65]）。
+- **天線**：手繞線圈。
+
+[證實：S p.67–73、71.md] 韌體逆向（經 SWD 以 OpenOCD 讀出 Cortex-M0+ flash）揭露運作：a–z 的**字形樣板**存在 flash `0x4D00–0x4E40`；植入**監看 Secure Element↔OLED 的 SPI 流量**，用樣板比對函式辨識畫面上的字母；比對出的**恢復助記詞 / 錢包備份**存在 flash `0x7000`，再**經行動網路模組送出**。
+
+## 核心手法一句話
+
+[證實：S p.77（SUMMARY）] 「植入外洩的是**螢幕上顯示的資料**：監看 OLED 的 SPI 匯流排，偵測助記詞用到的字母，經 4G LTE 送出。新版植入已被發現。」——**攻擊的要害不在破解安全元件，而在螢幕是明文、而顯示線可及。** 這一句正是我復刻時鎖定的那一段。
+
+# 三、復刻（jz 版）：被動顯示探針
+
+[證實：../README.md、../docs/2nd-screen.md] 我不複製整個植入（不碰電池、不做 4G 外洩、不碰真錢包），只復刻**最要害的那一段：被動旁聽顯示 SPI、把螢幕讀出來**。做法是一片 **Feather RP2040 被動高阻抗**搭在「控制器→OLED」的 SPI 匯流排上，四條線 `DI / CLK / CS / GND`（[證實：接線表，../docs/2nd-screen.md；wire.png / jz-version.jpg]）。
+
+- [證實：真板量測，../docs/2nd-screen.md] 以 `bus_probe` 用 RP2040 真輸入門檻硬體計 CLK 邊緣：靜態畫面 `rising/s=0`、切畫面跳到約 **8312 邊緣/重繪**（峰 16624），符合 write-on-change；每次重繪約 8312 邊緣 ≈ 一張 128×64 全畫面（8192 bit）。
+- [證實：真機擷取] 切畫面擷得約 **12,480 B** 原始垂直欄像素，重建成肉眼可讀的字形。
+- [證實：真機] 全畫面以 `B0..B7` 八頁、每頁 128 B 串流；每幀前固定 7 B 控制指令 `D5 xx 81 yy A6 C0 A0`（SSD1306-compatible profile 解碼，[推測／限制]：實際控制器型號未確認）。
+- [限制] 四線**不含 D/C（資料／命令）線**，故命令與像素未硬分；以完整八頁序列核對位置重建。DC 電表 CLK 1.8V 是讀值，未確認訊號振幅與電氣容限。
+
+[證實：jz-version.jpg、2nd.MP4；作者定案 2026-11-11] 目標框定：示範裝置是一支**自有的 Ledger Nano X**——接線照中四線（GND／CS／DAT／CLK）接在它身上，demo 影片中切畫面的也是它；wire.png 是作者在主板測試點上的手寫標註。../docs 把目標通稱為「點陣顯示評估板」，因為手法適用任何「控制器→OLED 明文 SPI」的裝置。
+
+# 四、第二螢幕：從復刻到我自己的貢獻
+
+[證實：../docs/2nd-screen.md、2nd.MP4] 復刻證明「我讀得懂這條線」；真正屬於我自己的加法，是把它變成一個**即時的「第二螢幕」**：主機端 `live_mirror.py` 邊收串流邊重建 128×64 framebuffer，在終端機原地重繪成 ASCII 畫面——**在板子上切畫面，終端裡的鏡像同步跟著變**（2nd.MP4，24 秒，畫面標題列 `DOT-MATRIX EVAL BOARD 128x64 — passive bus mirror`，狀態列 `page-sequence B0..B7`）。
+
+與研究者植入的分野（[證實：../AGENTS.md]）：
+
+- 研究者植入：**主動**在裝置內、具 **4G 外洩**能力、鎖定**助記詞**。
+- 我的第二螢幕：**被動、只讀、不接 MISO、不接 +5V**；GPIO 全程輸入、硬體鎖成永不驅動；唯一共用的電源線是 GND。主動回寫路線**已刻意移除**（2026-11-02）。
+
+[證實：../docs/2nd-screen.md「防護收尾」] 第二螢幕同時是一個防禦論證的載具：攻擊面是**可及的明文顯示鏈**，防線有三層——(1) 把顯示路徑納入安全邊界、走線不可及；(2) 顯示鏈加密 / MAC，被動擷取只拿到密文；(3) 物理防護＋開殼偵測。
+
+# 五、2nd-screen 作為一個「無碼」專案：AI 怎麼幫上忙
+
+[證實：../AGENTS.md、../docs/2nd-screen.md、../poc/*] 這個專案我沒有手寫底層程式；AI 協作集中在幾處，每處都以**真板結果**驗收，不是「生出來就算數」。
+
+## 置換對照：Joe 手工做的，我用 AI 換掉哪些
+
+把 Joe 的逆向流程拆成環節，逐一對照「Joe 怎麼做（手工）」與「jz 版對應環節由 AI 起草、我驗收什麼」。這張對照是本節的主軸（[證實：../docs/2nd-screen.md、../poc/*；對 Joe 側為 S 投影片]）：
+
+| Joe 的研究環節 | Joe 怎麼做 | jz 版對應 | AI 起草 | 我（真板）驗收 |
+|---|---|---|---|---|
+| **協定分析** | Logic Pro 8 抓 SPI、手工判讀（[S p.40–41]） | 由擷取流推回 SSD1306-compatible 命令表 | `D5/81/A6/C0/A0` 前綴＋`B0..B7` 頁命令、欄定址重建規則 | 真機八頁序列核對；標注控制器型號未確認、保留 unmatched bytes |
+| **解碼器 Decoder** | 韌體內 glyph 樣板比對（a–z 存 flash `0x4D00`，[S p.71–73]） | 主機端 `raster.py`／`live_mirror.py` 把欄位元組重建成 framebuffer→ASCII | 欄定址解碼、半格 ASCII 繪製、頁序列組幀 | 肉眼對照鏡像與實體螢幕一致（128×64 點數少，未做像素級比對） |
+| **編碼器 Encoder／擷取韌體** | 韌體捕獲螢幕資料、存 flash `0x7000`、經 4G 送出（[S p.72]） | RP2040 PIO 擷取＋DMA ring＋USB CDC 串流（**只讀、不外洩**、無損 RLE） | PIO 取樣程式、DMA 雙通道重啟、RLE byte-run 封包格式 | 晶片內 loopback 16384/16384 零不符；真板 bit-slip 除錯（下詳） |
+| **接線 / 探針** | 顯微焊到植入板（主動） | 四線被動高阻抗探針（`DI/CLK/CS/GND`） | 避開 Feather 絲印坑、選 D10/11/12 相鄰數位腳、OEOVER/OD 鎖成永不驅動 | 電表復驗、安全護欄（先通電再搭線、不接 +5V） |
+
+**一句話**：Joe 手工做的四個環節，在我的版本裡**三個由 AI 起草（協定分析、解碼器、編碼器韌體）、一個由 AI 導引（接線）**；但每一格的右欄——真板驗收——都還是我自己做的，而且正是那一欄抓出了 AI 初版錯的地方。
+
+以下三處各再展開一張 before→after：
+
+## 協定分析（Protocol analysis）
+
+- AI 起草：把擷取到的位元組流對照 SSD1306 datasheet，辨識出 `D5/81/A6/C0/A0` 前綴命令與 `B0..B7` 頁命令、推出「欄定址＋每欄 8 垂直位元」的重建規則。
+- 我驗收：以完整八頁序列與真機擷取核對；明確標注**未確認控制器型號**、未做像素級比對、`unmatched_bus_bytes` 保留不臆測（[證實：../docs/2nd-screen.md]）。
+
+## RP2040 實作（Firmware）
+
+- AI 起草：PIO 程式（每個 CS 低電位脈衝、CLK 邊緣取樣 DI 8 bit、autopush）＋ DMA ring ＋ USB CDC 串流；被動鎖定（OEOVER / pad OD 永不驅動）。
+- 我驗收：晶片內 loopback 自測（每 round 16384/16384 B 零不符）；真板逐 byte 對齊除錯——發現舊 PIO 碰不到 CS 拉高導致 bit-slip，改為每脈衝只取 8 bit；注入測試 193/193 包對齊、未注入 578/578 包對齊（[證實：../docs/2nd-screen.md、`_output/` 路徑]）。**要義**：AI 寫得出初版，但**真板上的 bit-slip 是靠量測抓出來的**，不是靠生成。
+
+## 接線（Wiring）
+
+- AI 協助：定位 Feather 的「Dn 絲印 ≠ GPIO 編號」坑（GP4 未接出、GP2/GP3 帶上拉要避開），選 D10/D11/D12 三支相鄰純數位腳。
+- 我驗收：接前電表復驗（GND 導通、上電量各點對地電壓辨識訊號線）；安全護欄（先 USB 通電再搭線、不接 +5V）（[證實：../docs/2nd-screen.md「安全護欄」]）。
+
+# 六、結論：AI 時代，對駭客與研究者各意味著什麼
+
+- [論點] **復刻成本崩塌是對稱的。** 同一股力量（AI 協作把協定分析、韌體、接線的門檻拉低）同時降低了攻擊者造植入與防禦者做驗證的成本。Joe Grand 數週的世界級逆向，其**核心手法**能被一個人用 AI 幾天復刻（本專案即是證據）。
+- [論點] **仍然稀缺的是「物理可及 + 驗證」。** AI 不會幫攻擊者取得你手上的裝置，也不會幫你確認手上這支沒被動過手腳。攻防的不對稱移到了供應鏈完整性與**可驗證性**。
+- [論點：CoolWallet 防禦意涵] 既然顯示鏈明文可及就守不住，防線要往「讓被動擷取只拿到密文」「讓物理碰觸留痕」靠：顯示鏈加密 / MAC、關鍵走線納入安全邊界、開殼偵測與外殼⇄主板配對——這正是 CoolWallet 導入 **AI 賦能防禦**可以著力之處（把這些檢查從人工變成可自動、可規模化的驗證）。
+- [論點] **AI 協作本身是可披露、可審計的。** 本專案每一步都標了「AI 起草什麼、我驗收什麼」與證據路徑——這套紀律（事實分級、真板驗收、保留不臆測）才是在 AI 時代仍然可信的關鍵，不是「AI 做的所以對」。
+
+# 討論問題
+
+1. 如果復刻一個高階硬體攻擊的核心手法，門檻已從「世界級專家數週」降到「一人 AI 協作數天」，那麼硬體錢包的威脅模型該不該預設「顯示鏈必被旁聽」？CoolWallet 要先投資哪一層防線（加密顯示鏈 vs. 物理防拆 vs. 供應鏈驗證）？

@@ -1,0 +1,213 @@
+/* ============================================================
+   house-style — DESIGN TOKENS (theme: font + palette)
+   The single source of the deck look. Engines link this as
+   asset/tokens.css; the font ships beside it as asset/ENSFont.woff2.
+   Swap the theme by editing token VALUES only — layout/motion
+   live in each engine (e.g. deck-svg asset/deck.css), not here.
+   Upstream of the ui-ux-pro-max design system.
+   ============================================================ */
+  @font-face {
+    font-family: 'ENS Font';
+    src: url('ENSFont.woff2') format('woff2');
+    font-weight: 100 500;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'ENS Font';
+    src: url('ENSFont-Bold.woff2') format('woff2');
+    font-weight: 600 900;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  /* Theme 1 (the default) lives on :root; the others are complete token sets
+     on :root[data-deck-theme="<id>"], which deck-svg's `c` / Shift+C keys set
+     live, because classroom lighting cannot be tested before the talk.
+     --deck-themes lists the ids in key order (first = this default). Every
+     theme defines every colour token below, so no dark default leaks into a
+     light theme; `./fw check-contrast` checks that and the contrast rules. */
+  :root {
+    --deck-themes: night graphite abyss forest plum chalkboard projector-dark
+                   projector-light paper sepia mist stone mint rose;
+    --theme-name: "夜幕";
+
+    --ink:        #06080f;
+    --ink-2:      #0c1019;
+    --ink-3:      #141a28;
+    --hair:       rgba(255,255,255,.10);
+    --hair-soft:  rgba(255,255,255,.06);
+
+    --text:       #f3f5fa;
+    --body:       #c5ccdb;
+    --muted:      #8b93a7;
+
+    --accent:      #e7ad46;
+    --accent-soft: rgba(231,173,70,.16);
+
+    --c1: #e7ad46;  /* 章節 1 — 金 */
+    --c2: #2dd4bf;  /* 章節 2 — 青 */
+    --c3: #34d399;  /* 章節 3 — 翠綠 */
+    --c4: #5b9dff;  /* 章節 4 — azure */
+
+    --on-chapter: #07090f;               /* 章節色塊上的字（編號圓點、選取） */
+    --glow:       rgba(91,157,255,.06);  /* 投影片左下角的第二道光暈 */
+    --title-from: #fff;                  /* 封面主標漸層 */
+    --title-to:   #cdd4e4;
+    --art-line:   rgba(255,255,255,.13); /* 封面裝飾線 */
+    --art-glow:   #e7ad46;               /* 封面光點 */
+    --shadow-lg: 0 22px 60px rgba(0,0,0,.55);
+
+    --chapter: var(--accent); /* 每張投影片以 style="--chapter:var(--cN)" 覆寫 */
+    --font: 'ENS Font', "PingFang TC", "Noto Sans CJK TC", system-ui, sans-serif;
+    --ease: cubic-bezier(.16,.84,.32,1);
+  }
+
+  /* ---------- dark themes ---------- */
+  :root[data-deck-theme="graphite"] {
+    --theme-name: "石墨";
+    --ink: #101010; --ink-2: #1c1c1e; --ink-3: #26262a;
+    --hair: rgba(255,255,255,.12); --hair-soft: rgba(255,255,255,.07);
+    --text: #f5f5f5; --body: #dedede; --muted: #a0a0a0;
+    --accent: #e99638; --accent-soft: rgba(233,150,56,.16);
+    --c1: #e99638; --c2: #15c087; --c3: #7caaf0; --c4: #f392b9;
+    --on-chapter: #121212; --glow: rgba(21,192,135,.06);
+    --title-from: #ffffff; --title-to: #d6d6d6; --art-glow: #e99638; --art-line: rgba(255,255,255,.13);
+    --shadow-lg: 0 22px 60px rgba(0,0,0,.55);
+  }
+  :root[data-deck-theme="abyss"] {
+    --theme-name: "深海";
+    --ink: #061120; --ink-2: #0d1d31; --ink-3: #14273f;
+    --hair: rgba(200,225,255,.12); --hair-soft: rgba(200,225,255,.07);
+    --text: #eef5ff; --body: #d3e0f2; --muted: #93a8c4;
+    --accent: #f1870d; --accent-soft: rgba(241,135,13,.16);
+    --c1: #f1870d; --c2: #0ac083; --c3: #77aaf8; --c4: #f98eb9;
+    --on-chapter: #071423; --glow: rgba(10,192,131,.06);
+    --title-from: #ffffff; --title-to: #c9dcf2; --art-glow: #f1870d; --art-line: rgba(200,225,255,.14);
+    --shadow-lg: 0 22px 60px rgba(0,0,0,.55);
+  }
+  :root[data-deck-theme="forest"] {
+    --theme-name: "森夜";
+    --ink: #0b1510; --ink-2: #122019; --ink-3: #1a2c22;
+    --hair: rgba(220,255,235,.11); --hair-soft: rgba(220,255,235,.06);
+    --text: #f0f7f2; --body: #d6e4da; --muted: #97ac9e;
+    --accent: #c4a731; --accent-soft: rgba(196,167,49,.16);
+    --c1: #c4a731; --c2: #32c781; --c3: #9ba5e6; --c4: #e390b1;
+    --on-chapter: #0b1510; --glow: rgba(50,199,129,.05);
+    --title-from: #ffffff; --title-to: #d3e4d8; --art-glow: #c4a731; --art-line: rgba(220,255,235,.13);
+    --shadow-lg: 0 22px 60px rgba(0,0,0,.55);
+  }
+  :root[data-deck-theme="plum"] {
+    --theme-name: "暮紫";
+    --ink: #120c1b; --ink-2: #1e1630; --ink-3: #281e3e;
+    --hair: rgba(240,225,255,.12); --hair-soft: rgba(240,225,255,.07);
+    --text: #f6f1ff; --body: #e0d8f0; --muted: #a59abb;
+    --accent: #de9c19; --accent-soft: rgba(222,156,25,.16);
+    --c1: #de9c19; --c2: #14b881; --c3: #a1a1f5; --c4: #f392b9;
+    --on-chapter: #150f1f; --glow: rgba(20,184,129,.06);
+    --title-from: #ffffff; --title-to: #ddd2f0; --art-glow: #de9c19; --art-line: rgba(240,225,255,.14);
+    --shadow-lg: 0 22px 60px rgba(0,0,0,.55);
+  }
+  :root[data-deck-theme="chalkboard"] {
+    --theme-name: "黑板";
+    --ink: #101b16; --ink-2: #16231d; --ink-3: #1c2b24;
+    --hair: rgba(240,240,225,.16); --hair-soft: rgba(240,240,225,.08);
+    --text: #fcfbf5; --body: #f1f0e6; --muted: #c2cbc0;
+    --accent: #c3b939; --accent-soft: rgba(195,185,57,.14);
+    --c1: #c3b939; --c2: #4ecc91; --c3: #caa9e6; --c4: #e5a4be;
+    --on-chapter: #101b16; --glow: rgba(78,204,145,.05);
+    --title-from: #ffffff; --title-to: #e6e6da; --art-glow: #c3b939; --art-line: rgba(240,240,225,.16);
+    --shadow-lg: 0 22px 60px rgba(0,0,0,.45);
+  }
+  /* 高對比（暗）：純黑底、白字、飽和亮色，給昏暗教室或偏暗的投影機。 */
+  :root[data-deck-theme="projector-dark"] {
+    --theme-name: "投影高對比・暗";
+    --ink: #000000; --ink-2: #111111; --ink-3: #1a1a1a;
+    --hair: rgba(255,255,255,.30); --hair-soft: rgba(255,255,255,.14);
+    --text: #ffffff; --body: #f2f2f2; --muted: #cccccc;
+    --accent: #dfb819; --accent-soft: rgba(223,184,25,.14);
+    --c1: #dfb819; --c2: #17d1c5; --c3: #897af0; --c4: #ec537c;
+    --on-chapter: #000000; --glow: rgba(0,0,0,0);
+    --title-from: #ffffff; --title-to: #ffffff; --art-glow: #dfb819; --art-line: rgba(255,255,255,.18);
+    --shadow-lg: 0 22px 60px rgba(0,0,0,.6);
+  }
+
+  /* ---------- light themes ---------- */
+  /* 高對比（亮）：白底黑字、深色飽和強調，給燈光全開的教室。 */
+  :root[data-deck-theme="projector-light"] {
+    --theme-name: "投影高對比・亮";
+    --ink: #ffffff; --ink-2: #f2f2f2; --ink-3: #f7f7f7;
+    --hair: rgba(0,0,0,.35); --hair-soft: rgba(0,0,0,.12);
+    --text: #000000; --body: #111111; --muted: #3d3d3d;
+    --accent: #962200; --accent-soft: rgba(150,34,0,.10);
+    --c1: #962200; --c2: #00694a; --c3: #1c41ec; --c4: #a21081;
+    --on-chapter: #ffffff; --glow: rgba(0,0,0,0);
+    --title-from: #000000; --title-to: #000000; --art-glow: rgba(150,34,0,.35); --art-line: rgba(0,0,0,.14);
+    --shadow-lg: 0 10px 30px rgba(0,0,0,.12);
+  }
+  :root[data-deck-theme="paper"] {
+    --theme-name: "紙白";
+    --ink: #fafaf7; --ink-2: #ffffff; --ink-3: #fdfdfb;
+    --hair: rgba(20,25,35,.16); --hair-soft: rgba(20,25,35,.07);
+    --text: #111318; --body: #2b2f38; --muted: #555b69;
+    --accent: #853a02; --accent-soft: rgba(133,58,2,.10);
+    --c1: #853a02; --c2: #04564a; --c3: #1f36d2; --c4: #8c1777;
+    --on-chapter: #ffffff; --glow: rgba(31,54,210,.05);
+    --title-from: #111318; --title-to: #3a404c; --art-glow: rgba(133,58,2,.35); --art-line: rgba(20,25,35,.12);
+    --shadow-lg: 0 14px 40px rgba(20,25,35,.12);
+  }
+  :root[data-deck-theme="sepia"] {
+    --theme-name: "米黃";
+    --ink: #f8f1e3; --ink-2: #fefaf2; --ink-3: #fbf5ea;
+    --hair: rgba(60,40,20,.18); --hair-soft: rgba(60,40,20,.08);
+    --text: #241a10; --body: #3a2e22; --muted: #66563f;
+    --accent: #853a02; --accent-soft: rgba(133,58,2,.10);
+    --c1: #853a02; --c2: #04564a; --c3: #1f36d2; --c4: #8c1777;
+    --on-chapter: #ffffff; --glow: rgba(31,54,210,.05);
+    --title-from: #241a10; --title-to: #4a3b2b; --art-glow: rgba(133,58,2,.35); --art-line: rgba(60,40,20,.14);
+    --shadow-lg: 0 14px 40px rgba(60,40,20,.14);
+  }
+  :root[data-deck-theme="mist"] {
+    --theme-name: "霧藍";
+    --ink: #f2f6fa; --ink-2: #fcfdff; --ink-3: #f7f9fc;
+    --hair: rgba(15,35,65,.16); --hair-soft: rgba(15,35,65,.07);
+    --text: #0d192a; --body: #213149; --muted: #4c5d77;
+    --accent: #853a02; --accent-soft: rgba(133,58,2,.10);
+    --c1: #853a02; --c2: #04564a; --c3: #1f36d2; --c4: #8c1777;
+    --on-chapter: #ffffff; --glow: rgba(31,54,210,.06);
+    --title-from: #0d192a; --title-to: #2f4361; --art-glow: rgba(133,58,2,.35); --art-line: rgba(15,35,65,.12);
+    --shadow-lg: 0 14px 40px rgba(15,35,65,.12);
+  }
+  :root[data-deck-theme="stone"] {
+    --theme-name: "石灰";
+    --ink: #f4f3f0; --ink-2: #fdfcfb; --ink-3: #f9f8f6;
+    --hair: rgba(30,28,25,.17); --hair-soft: rgba(30,28,25,.08);
+    --text: #161514; --body: #2d2b28; --muted: #58544f;
+    --accent: #853a02; --accent-soft: rgba(133,58,2,.10);
+    --c1: #853a02; --c2: #04564a; --c3: #1f36d2; --c4: #8c1777;
+    --on-chapter: #ffffff; --glow: rgba(31,54,210,.05);
+    --title-from: #161514; --title-to: #3d3a36; --art-glow: rgba(133,58,2,.35); --art-line: rgba(30,28,25,.12);
+    --shadow-lg: 0 14px 40px rgba(30,28,25,.12);
+  }
+  :root[data-deck-theme="mint"] {
+    --theme-name: "薄荷";
+    --ink: #f1f8f4; --ink-2: #fcfefd; --ink-3: #f7fbf9;
+    --hair: rgba(15,45,35,.16); --hair-soft: rgba(15,45,35,.07);
+    --text: #0e1f18; --body: #22362d; --muted: #4a6156;
+    --accent: #853a02; --accent-soft: rgba(133,58,2,.10);
+    --c1: #853a02; --c2: #04564a; --c3: #1f36d2; --c4: #8c1777;
+    --on-chapter: #ffffff; --glow: rgba(31,54,210,.05);
+    --title-from: #0e1f18; --title-to: #2d4a3d; --art-glow: rgba(133,58,2,.35); --art-line: rgba(15,45,35,.12);
+    --shadow-lg: 0 14px 40px rgba(15,45,35,.12);
+  }
+  :root[data-deck-theme="rose"] {
+    --theme-name: "杏粉";
+    --ink: #fcf5f3; --ink-2: #fffcfb; --ink-3: #fef8f7;
+    --hair: rgba(70,25,30,.16); --hair-soft: rgba(70,25,30,.07);
+    --text: #2a1317; --body: #42252a; --muted: #6c4d52;
+    --accent: #853a02; --accent-soft: rgba(133,58,2,.10);
+    --c1: #853a02; --c2: #04564a; --c3: #1f36d2; --c4: #8c1777;
+    --on-chapter: #ffffff; --glow: rgba(31,54,210,.05);
+    --title-from: #2a1317; --title-to: #57363c; --art-glow: rgba(133,58,2,.35); --art-line: rgba(70,25,30,.12);
+    --shadow-lg: 0 14px 40px rgba(70,25,30,.12);
+  }

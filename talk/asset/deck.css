@@ -1,0 +1,473 @@
+/* ============================================================
+   deck-svg — COMPONENT / LAYOUT / MOTION
+   The vector-deck authoring vocabulary: slide base, cards, grids,
+   hero/finale, entrance + loop animations, print rules.
+   Theme tokens (font, palette) come from house-style asset/tokens.css.
+   Pairs with the <deck-stage> element from the deck-runtime skill.
+   ============================================================ */
+  deck-stage:not(:defined) { visibility: hidden; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+
+  /* ============================================================
+     SLIDE BASE — 每個 <section> 都是一張 1920×1080 投影片
+     ============================================================ */
+  /* Type scale for a classroom projector: body 40px, tables and labels 34px
+     at least, titles 76px — sizes that read on a laptop wash out from the back
+     row. Only presenter chrome (.hero__hint key hints, .deck-font-status) is
+     smaller, because the audience does not need to read it. */
+  .slide {
+    display: flex; flex-direction: column; padding: 72px 96px 64px;
+    background:
+      radial-gradient(75rem 50rem at 72% 8%, color-mix(in srgb, var(--chapter) 11%, transparent), transparent 60%),
+      radial-gradient(60rem 48rem at 10% 100%, var(--glow, rgba(91,157,255,.06)), transparent 60%),
+      var(--ink);
+    color: var(--body); font-family: var(--font);
+    font-size: calc(40px * var(--deck-font-scale, 1)); line-height: 1.65; letter-spacing: .01em;
+    -webkit-font-smoothing: antialiased;
+  }
+  .slide h1, .slide h2, .slide h3 {
+    font-family: var(--font); color: var(--text);
+    font-weight: 700; line-height: 1.3; letter-spacing: .02em; margin: 0;
+  }
+  ::selection { background: var(--chapter); color: var(--on-chapter, #07090f); }
+
+  .topbar {
+    display: flex; align-items: baseline; justify-content: space-between;
+    border-bottom: 1px solid var(--hair); padding-bottom: 20px; flex: none;
+  }
+  .eyebrow { font-size: calc(34px * var(--deck-font-scale, 1)); font-weight: 700; letter-spacing: .2em; color: var(--chapter); }
+  .chap { font-size: calc(34px * var(--deck-font-scale, 1)); letter-spacing: .08em; color: var(--body); }
+  .chap b { color: var(--text); font-weight: 700; }
+  /* Pipeline step strip (storyboard 流程步驟 + 環節, scripts/_deck_steps.py): one two-character
+     cell per step, right of the eyebrow and left of the page number. .chg = this slide's
+     numbers come from changing the step (filled); .say = explained, not changed (outlined).
+     The eyebrow tightens beside it so a long eyebrow stays on one line. */
+  .pmap { display: inline-flex; gap: 6px; align-items: center; flex-shrink: 0; align-self: center; margin: 0 28px 0 auto; }
+  .pcell { display: inline-block; white-space: nowrap; padding: 2px 8px; border: 2px solid var(--hair); border-radius: 8px;
+    font-size: calc(34px * var(--deck-font-scale, 1)); line-height: 1.3; font-weight: 700; letter-spacing: 0; color: var(--body); }
+  .pcell.chg { background: var(--chapter); border-color: var(--chapter); color: var(--on-chapter, #07090f); }
+  .pcell.say { border: 4px solid var(--text); color: var(--text); padding: 0 6px; }
+  .topbar:has(.pmap) .eyebrow { letter-spacing: .06em; }
+
+  .content { flex: 1; display: flex; flex-direction: column; justify-content: center; min-height: 0; padding-top: 32px; }
+
+  .railtop { position: absolute; inset: 0 0 auto 0; height: 6px; flex: none;
+    background: linear-gradient(90deg, var(--c1), var(--c2), var(--c3), var(--c4)); opacity: .85; }
+
+  /* ---------- typography helpers ---------- */
+  .title  { font-size: calc(76px * var(--deck-font-scale, 1)); line-height: 1.24; margin: 0 0 24px; }
+  .title .hl { color: var(--chapter); }
+  .kicker { font-size: calc(56px * var(--deck-font-scale, 1)); line-height: 1.3; margin: 0 0 28px; color: var(--text); }
+  .kicker .hl { color: var(--chapter); }
+  .lead   { font-size: calc(40px * var(--deck-font-scale, 1)); line-height: 1.6; color: var(--body); max-width: 1600px; margin: 0; }
+  .lead strong, .slide strong { color: var(--text); font-weight: 700; }
+  .lead em, .slide em { color: var(--chapter); font-style: normal; font-weight: 700; }
+  .muted { color: var(--muted); }
+  .mt { margin-top: 28px; }
+
+  /* ---------- grids & cards ---------- */
+  .grid { display: grid; gap: 28px; }
+  .grid.two { grid-template-columns: 1fr 1fr; }
+  .grid.three { grid-template-columns: repeat(3,1fr); }
+  .cols { display: grid; gap: 48px; align-items: start; }
+  .cols.split { grid-template-columns: 1fr 1fr; }
+
+  .card {
+    background: linear-gradient(180deg, var(--ink-3), var(--ink-2));
+    border: 1px solid var(--hair); border-radius: 18px;
+    padding: 32px 34px; box-shadow: var(--shadow-lg); position: relative; overflow: hidden;
+  }
+  .card::before { content:""; position:absolute; inset:0 0 auto 0; height:4px; background: var(--chapter); opacity:.85; }
+  .card h3 { font-size: calc(46px * var(--deck-font-scale, 1)); margin: 0 0 12px; }
+  .card p { font-size: calc(40px * var(--deck-font-scale, 1)); line-height: 1.5; margin: 0 0 12px; }
+  .card p:last-child { margin-bottom: 0; }
+  .card .tag { display:inline-block; font-size: calc(34px * var(--deck-font-scale, 1)); letter-spacing:.12em; color:var(--chapter); font-weight:700; margin-bottom:10px; }
+  .card ul.clean li { font-size: calc(40px * var(--deck-font-scale, 1)); line-height: 1.5; }
+
+  /* ---------- comparison table ---------- */
+  table.cmp { width:100%; border-collapse: collapse; font-size: calc(34px * var(--deck-font-scale, 1)); }
+  table.cmp caption { text-align:left; color:var(--body); font-size: calc(34px * var(--deck-font-scale, 1)); letter-spacing:.06em; padding-bottom:14px; }
+  table.cmp th, table.cmp td { text-align:left; padding: 16px 20px; border-bottom: 1px solid var(--hair); vertical-align: top; line-height:1.45; }
+  /* .tight: six or more rows fit without shrinking the text below 34px; past
+     about four columns × five rows, split the table across slides instead */
+  table.cmp.tight th, table.cmp.tight td { padding: 8px 16px; line-height: 1.35; }
+  table.cmp thead th { color: var(--text); font-size: calc(34px * var(--deck-font-scale, 1)); }
+  table.cmp tbody th { color: var(--text); font-weight:700; width:24%; }
+  table.cmp td { color: var(--body); }
+
+  /* ---------- pull quote ---------- */
+  blockquote.pull {
+    margin: 0; padding: 28px 40px; border-left: 5px solid var(--chapter);
+    font-size: calc(50px * var(--deck-font-scale, 1)); line-height: 1.42; color: var(--text); font-weight: 700; letter-spacing:.01em;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--chapter) 14%, transparent), transparent);
+    border-radius: 0 14px 14px 0;
+  }
+  blockquote.pull cite { display:block; margin-top:20px; font-size: calc(34px * var(--deck-font-scale, 1)); font-style:normal; font-weight:400; color:var(--body); line-height:1.5; }
+
+  /* ---------- stats ---------- */
+  .stats { display:grid; grid-template-columns: repeat(3,1fr); gap: 28px; }
+  .stats.four { grid-template-columns: repeat(4,1fr); }
+  .stat { text-align:center; padding: 40px 26px; border:1px solid var(--hair); border-radius:18px; background:var(--ink-2); }
+  .stat .n { font-weight:700; font-size: calc(96px * var(--deck-font-scale, 1)); color: var(--chapter); line-height:1.1; }
+  .stat .l { color: var(--body); font-size: calc(36px * var(--deck-font-scale, 1)); margin-top:12px; line-height:1.4; }
+
+  /* ---------- clean bullet list ---------- */
+  ul.clean { list-style:none; padding:0; margin:0; display:grid; gap:16px; }
+  ul.clean.lead-size li { font-size: calc(40px * var(--deck-font-scale, 1)); line-height:1.55; }
+  ul.clean li { padding-left: 40px; position:relative; line-height:1.55; }
+  ul.clean li::before { content:""; position:absolute; left:0; top:.6em; width:14px; height:14px; border-radius:50%; background: var(--chapter); }
+
+  /* ---------- SVG art ---------- */
+  svg.art { display:block; width:100%; height:auto; overflow:visible; }
+
+  /* ---------- diagram SVG (svg.art.dg): redrawn source figures ----------
+     Classes instead of fill/stroke attributes, so a redrawn figure follows the
+     theme and the chapter colour like the rest of the slide. Size the viewBox
+     to the slide pixels it fills (≈1720 wide at full width), so 34px text
+     stays 34px on screen instead of shrinking with the figure. */
+  svg.dg text { font-family: var(--font); font-size: calc(34px * var(--deck-font-scale, 1)); fill: var(--text); }
+  svg.dg text.sub { fill: var(--body); }
+  svg.dg text.acc { fill: var(--chapter); font-weight: 700; }
+  svg.dg text.b { font-weight: 700; }
+  svg.dg .box { fill: var(--ink-2); stroke: var(--hair); stroke-width: 2; }
+  svg.dg .box.hi { stroke: var(--chapter); stroke-width: 4; }
+  svg.dg .box.fill { fill: color-mix(in srgb, var(--chapter) 22%, var(--ink-2)); stroke: var(--chapter); }
+  svg.dg .edge { stroke: var(--chapter); stroke-width: 4; fill: none; }
+  svg.dg .edge.off { stroke: var(--muted); stroke-dasharray: 12 10; }
+  svg.dg .ah { fill: var(--chapter); }
+  svg.dg .seg { stroke: var(--ink); stroke-width: 4; }
+  svg.dg .seg.big { fill: color-mix(in srgb, var(--chapter) 55%, var(--ink-2)); }
+  svg.dg .seg.mid { fill: color-mix(in srgb, var(--chapter) 30%, var(--ink-2)); }
+  svg.dg .seg.small { fill: var(--ink-3); }
+  svg.dg .kline { stroke: var(--text); stroke-width: 4; stroke-dasharray: 8 8; }
+  .art-cap { text-align:center; color:var(--body); font-size: calc(34px * var(--deck-font-scale, 1)); margin-top:16px; letter-spacing:.03em; }
+  .artbox { display:flex; flex-direction:column; justify-content:center; }
+
+  /* ---------- flow diagram (分析框架) ---------- */
+  .flowdiag { display: flex; align-items: stretch; gap: 20px; width: 100%; margin-top: 24px; }
+  .flownode { flex: 1 1 0; min-width: 0; border: 1px solid var(--hair); border-top: 4px solid var(--chapter); border-radius: 16px;
+    background: var(--ink-2); padding: 32px 28px; text-align: center; display: flex; flex-direction: column; justify-content: center; box-shadow: var(--shadow-lg); }
+  .flownode h3 { font-size: calc(44px * var(--deck-font-scale, 1)); margin: 0 0 12px; }
+  .flownode p { margin: 0; font-size: calc(38px * var(--deck-font-scale, 1)); color: var(--body); line-height: 1.5; }
+  .flowarrow { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; padding: 0 8px; color: var(--chapter); font-size: calc(52px * var(--deck-font-scale, 1)); font-weight: 700; }
+
+  /* ============================================================
+     CONTENT-SHAPE COMPONENTS — shape → class: reference/slide-patterns.md
+     One class per content shape, so the shape of the material picks the
+     layout instead of the material being cut to fit bullets or a table.
+     ============================================================ */
+
+  /* ---------- one claim (shape 1) ---------- */
+  .claim { font-size: calc(64px * var(--deck-font-scale, 1)); line-height: 1.35; color: var(--text); font-weight: 700; max-width: 1640px; margin: 0; }
+  .claim .hl { color: var(--chapter); }
+  .claim + .lead { margin-top: 32px; }
+
+  /* ---------- definition (shape 2): term + definition | example ---------- */
+  .defn { display:grid; grid-template-columns: 1.1fr 1fr; gap: 48px; align-items: start; }
+  .defn .term h3 { font-size: calc(50px * var(--deck-font-scale, 1)); margin: 0 0 18px; }
+  .defn .term h3 small { display:block; font-size: calc(34px * var(--deck-font-scale, 1)); color: var(--body); font-weight: 400; letter-spacing: .08em; margin-top: 6px; }
+  .defn .term p { font-size: calc(40px * var(--deck-font-scale, 1)); line-height: 1.55; margin: 0; }
+  .defn .example { border-left: 5px solid var(--chapter); padding: 6px 0 6px 30px; }
+  .defn .example b { display:block; color: var(--chapter); font-size: calc(34px * var(--deck-font-scale, 1)); letter-spacing: .12em; margin-bottom: 8px; }
+  .defn .example p { font-size: calc(40px * var(--deck-font-scale, 1)); line-height: 1.55; margin: 0; color: var(--body); }
+
+  /* ---------- two-axis matrix (shape 4): 2×2 / 3×3 typology, payoff ---------- */
+  .matrix { display:grid; grid-template-columns: auto 1fr; grid-template-rows: 1fr auto; gap: 0 20px; align-items: stretch; }
+  .matrix .axis-y { grid-row: 1; writing-mode: vertical-rl; text-align: center; /* upright CJK, reads top→bottom */
+    color: var(--chapter); font-weight: 700; font-size: calc(34px * var(--deck-font-scale, 1)); letter-spacing: .16em; }
+  .matrix .axis-x { grid-column: 2; grid-row: 2; text-align: center; color: var(--chapter); font-weight: 700; font-size: calc(34px * var(--deck-font-scale, 1)); letter-spacing: .16em; margin-top: 12px; }
+  .matrix table { grid-column: 2; grid-row: 1; width: 100%; height: 100%; border-collapse: separate; border-spacing: 12px; font-size: calc(34px * var(--deck-font-scale, 1)); }
+  .matrix th { color: var(--text); font-weight: 700; font-size: calc(34px * var(--deck-font-scale, 1)); padding: 4px 8px; line-height: 1.35; }
+  .matrix thead th { text-align: center; vertical-align: bottom; }
+  .matrix tbody th { text-align: right; white-space: nowrap; vertical-align: middle; }
+  .matrix td { background: var(--ink-2); border: 1px solid var(--hair); border-radius: 14px; padding: 14px 20px; vertical-align: top; line-height: 1.4; color: var(--body); }
+  .matrix td b { display:block; color: var(--text); font-size: calc(38px * var(--deck-font-scale, 1)); margin-bottom: 4px; }
+  .matrix td.hi { border-color: var(--chapter); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--chapter) 60%, transparent); }
+  .matrix td.dim { color: var(--muted); }
+
+  /* ---------- spectrum (shape 5): two poles, positions marked ---------- */
+  .spectrum { padding-top: 10px; }
+  .spectrum .marks { position: relative; height: 270px; }
+  .spectrum .mark { position: absolute; bottom: 0; transform: translateX(-50%); width: 360px; text-align: center; }
+  .spectrum .mark b { display:block; color: var(--text); font-size: calc(40px * var(--deck-font-scale, 1)); line-height: 1.25; }
+  .spectrum .mark span { display:block; color: var(--body); font-size: calc(34px * var(--deck-font-scale, 1)); line-height: 1.35; margin-top: 4px; }
+  .spectrum .mark::after { content:""; display:block; width: 20px; height: 20px; border-radius: 50%; background: var(--chapter); margin: 14px auto -4px; }
+  .spectrum .bar { height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--c1), var(--c3)); }
+  .spectrum .ends { display:flex; justify-content: space-between; margin-top: 16px; font-size: calc(38px * var(--deck-font-scale, 1)); color: var(--text); font-weight: 700; }
+
+  /* ---------- timeline (shape 9) ---------- */
+  .timeline { display:grid; grid-auto-flow: column; grid-auto-columns: 1fr; position: relative; padding-top: 52px; }
+  .timeline::before { content:""; position:absolute; left: 0; right: 0; top: 29px; height: 4px; background: var(--hair); }
+  .tl { position: relative; padding: 0 20px 0 0; }
+  .tl::before { content:""; position:absolute; top: -34px; left: 0; width: 20px; height: 20px; border-radius: 50%; background: var(--chapter); border: 3px solid var(--ink); }
+  .tl time { display:block; color: var(--chapter); font-weight: 700; font-size: calc(36px * var(--deck-font-scale, 1)); letter-spacing: .06em; margin-bottom: 6px; }
+  .tl b { display:block; color: var(--text); font-size: calc(40px * var(--deck-font-scale, 1)); line-height: 1.25; margin-bottom: 6px; }
+  .tl p { margin: 0; font-size: calc(34px * var(--deck-font-scale, 1)); color: var(--body); line-height: 1.4; }
+
+  /* ---------- levels / hierarchy (shape 10): stacked tiers ---------- */
+  .tiers { display:grid; gap: 14px; }
+  .tier { display:grid; grid-template-columns: 400px 1fr; gap: 28px; align-items: center;
+    padding: 20px 30px; border: 1px solid var(--hair); border-left: 8px solid var(--chapter); border-radius: 14px; background: var(--ink-2); }
+  .tier h3 { font-size: calc(44px * var(--deck-font-scale, 1)); margin: 0; }
+  .tier p { margin: 0; font-size: calc(40px * var(--deck-font-scale, 1)); color: var(--body); line-height: 1.45; }
+  /* label_width: narrow — short level names do not need 400px */
+  .tiers--narrow .tier { grid-template-columns: 220px 1fr; }
+
+  /* ---------- discussion question (shape 13): claim, two sides, ask ---------- */
+  .debate .claim { font-size: calc(52px * var(--deck-font-scale, 1)); margin-bottom: 28px; }
+  .debate .sides { display:grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .debate .side { border: 1px solid var(--hair); border-radius: 18px; padding: 26px 30px; background: var(--ink-2); border-top: 4px solid var(--chapter); }
+  .debate .side h3 { font-size: calc(44px * var(--deck-font-scale, 1)); color: var(--chapter); margin: 0 0 10px; }
+  .debate .side p { margin: 0; font-size: calc(40px * var(--deck-font-scale, 1)); line-height: 1.5; }
+  .debate .ask { margin-top: 26px; font-size: calc(40px * var(--deck-font-scale, 1)); color: var(--body); }
+  .debate .ask strong { color: var(--text); }
+
+  /* ============================================================
+     HERO (title slide)
+     ============================================================ */
+  .hero { padding: 0; align-items: stretch; justify-content: center;
+    background: radial-gradient(60rem 44rem at 50% 30%, var(--accent-soft), transparent 60%), var(--ink); overflow:hidden; }
+  .hero__layers { position:absolute; inset:0; z-index:0; }
+  .hero .grid-layer {
+    position:absolute; inset:0;
+    background-image:
+      linear-gradient(var(--hair-soft) 1px, transparent 1px),
+      linear-gradient(90deg, var(--hair-soft) 1px, transparent 1px);
+    background-size: 92px 92px;
+    mask-image: radial-gradient(ellipse 80% 70% at 50% 42%, #000 30%, transparent 75%);
+  }
+  .hero__inner { position:relative; z-index:2; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; width:100%; }
+  .hero h1 {
+    font-size: calc(132px * var(--deck-font-scale, 1)); line-height: 1.04; letter-spacing:.04em; margin:0; max-width: 1500px;
+    background: linear-gradient(180deg, var(--title-from, #fff) 0%, var(--title-to, #cdd4e4) 62%, var(--accent) 125%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero__sub { font-size: calc(48px * var(--deck-font-scale, 1)); color: var(--body); margin: 36px auto 0; max-width: 1500px; line-height:1.45; }
+  /* Balance centred headline lines so a wrap never strands one or two
+     characters on a line of their own. */
+  .hero h1, .hero__sub, .finale h2, .onesentence { text-wrap: balance; }
+  .hero__meta { margin-top: 48px; color: var(--body); font-size: calc(40px * var(--deck-font-scale, 1)); line-height:1.6; }
+  .hero__meta strong { color: var(--text); font-weight:700; }
+  /* .hero__hint is presenter chrome (key hints), so it stays below the 34px floor */
+  .hero__hint { position:absolute; right:120px; bottom:64px; z-index:2; color:var(--muted); font-size: calc(22px * var(--deck-font-scale, 1)); letter-spacing:.04em; }
+  .hero__hint kbd { display:inline-block; padding:3px 12px; margin:0 4px; border:1px solid var(--hair); border-radius:7px; background:var(--ink-2); color:var(--text); font-family:var(--font); font-size: calc(20px * var(--deck-font-scale, 1)); }
+
+  /* ============================================================
+     FINALE
+     ============================================================ */
+  .finale { align-items:center; }
+  .finale .content { text-align:center; align-items:center; }
+  .finale h2 { font-size: calc(120px * var(--deck-font-scale, 1)); line-height:1.2; margin:0 0 28px; }
+  .onesentence { font-size: calc(48px * var(--deck-font-scale, 1)); color:var(--text); max-width: 1500px; margin: 0 auto; line-height:1.5; }
+
+  /* ============================================================
+     ENTRANCE ANIMATION — 投影片成為 active 時播放
+     ============================================================ */
+  .rise { opacity: 0; transform: translateY(30px); }
+  .slide[data-deck-active] .rise { animation: rise .66s var(--ease) forwards; }
+  .slide[data-deck-active] .rise.d1 { animation-delay: .09s; }
+  .slide[data-deck-active] .rise.d2 { animation-delay: .18s; }
+  .slide[data-deck-active] .rise.d3 { animation-delay: .27s; }
+  .slide[data-deck-active] .rise.d4 { animation-delay: .36s; }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+
+  /* ---------- 迴圈 SVG 動態（theme-aware） ---------- */
+  .flow { stroke-dasharray: 5 9; animation: flow 2.6s linear infinite; }
+  @keyframes flow { to { stroke-dashoffset: -56; } }
+  .pulse { animation: pulse 3.4s ease-in-out infinite; transform-box: fill-box; transform-origin:center; }
+  .pulse.b { animation-delay:-1.1s; } .pulse.c { animation-delay:-2.2s; }
+  @keyframes pulse { 0%,100%{opacity:.4;} 50%{opacity:1;} }
+  .aurora { animation: aurora 16s ease-in-out infinite alternate; }
+  @keyframes aurora { 0%{transform:translate3d(-1.5%,-1%,0) scale(1.05);} 100%{transform:translate3d(2%,1.5%,0) scale(1.12);} }
+
+  /* ============================================================
+     REDUCED MOTION — ui-ux-pro-max High severity，不可省略
+     ============================================================ */
+  @media (prefers-reduced-motion: reduce) {
+    .rise { opacity:1 !important; transform:none !important; animation:none !important; }
+    .flow,.pulse,.aurora { animation:none !important; }
+  }
+
+  /* ============================================================
+     活潑模式（asset/deck-motion.js，選用）— 投影片元素標 data-beat 逐拍出現。
+     引擎載入並開啟時 <html> 帶 data-deck-motion，拍未到的元素先藏；
+     沒有引擎、或按 M 關掉，什麼都不藏，deck 就是原本的靜態版。
+     ============================================================ */
+  html[data-deck-motion] [data-beat] { opacity: 0; }
+  /* SVG 子元素的縮放原點由引擎（GSAP）自己算，要的是預設的 transform-box: view-box；這裡不設 fill-box，否則 pop／FLIP 會偏 */
+
+  /* ============================================================
+     PRINT — reveal every slide for Print → Save as PDF.
+     deck-stage's print CSS forces the <section>s visible, but ::slotted()
+     can't reach .rise descendants, so without this only the active slide's
+     content prints. Force .rise visible and freeze loops on ALL slides.
+     ============================================================ */
+  @media print {
+    .rise { opacity:1 !important; transform:none !important; animation:none !important; }
+    .flow,.pulse,.aurora { animation:none !important; }
+    [data-beat] { opacity:1 !important; transform:none !important; }   /* 活潑模式：每頁全展開 */
+    [data-beat][data-fx="draw"] { stroke-dasharray:none !important; stroke-dashoffset:0 !important; }   /* 畫到一半的線也畫滿 */
+    deck-stage > section { transform:none !important; }                 /* 拿掉鏡頭緩推 */
+  }
+
+  /* ---------- two-column text block (.colblock) — used by reading-guide ---------- */
+  .colblock h3 { font-size: calc(46px * var(--deck-font-scale, 1)); margin: 0 0 16px; color: var(--chapter); }
+  .colblock ul.clean li { font-size: calc(40px * var(--deck-font-scale, 1)); line-height: 1.5; }
+  /* claim vs weakness (shape 6): .against keeps the rebuttal column's heading
+     neutral so the chapter colour marks the author's side; .verdict closes the
+     slide with the judgment or the question it leaves. */
+  .colblock.against h3 { color: var(--text); }
+  .verdict { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--hair); font-size: calc(40px * var(--deck-font-scale, 1)); color: var(--text); }
+  .verdict em { color: var(--chapter); }
+  .verdict.box {
+    margin-top: 20px; padding: 14px 24px;
+    border: 1px solid var(--hair); border-left: 8px solid var(--chapter);
+    border-radius: 14px; background: var(--ink-2);
+    font-size: calc(36px * var(--deck-font-scale, 1));
+  }
+
+  /* ---------- L-CANVAS: standard frame around one free drawing area ----------
+     The canvas takes all height the title, lead and closing box leave, so a diagram
+     sized to the content width (1728px) is drawn at its own pixels and the 34px
+     type floor holds; a taller one scales down and #debug reports the small text. */
+  .canvas-frame { justify-content: flex-start; }
+  .canvas { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  .canvas > svg, .canvas > div > svg { max-width: 100%; max-height: 100%; width: auto; height: auto; }
+  .canvas-empty { width: 100%; height: 100%; min-height: 320px; display: grid; place-items: center;
+    border: 3px dashed var(--hair); border-radius: 18px; color: var(--muted);
+    font-size: calc(40px * var(--deck-font-scale, 1)); }
+  .canvas-frame .verdict { margin-top: 24px; }
+
+  /* ---------- formula line (storyboard 公式 column → p.fx, typeset by asset/katex) ----------
+     One line under the slide body, at body size, for an audience that reads the formula
+     faster than the prose; .sep separates several formulas, small is a gloss. */
+  p.fx { margin: 28px 0 0; padding-top: 18px; border-top: 1px solid var(--hair);
+    font-size: calc(40px * var(--deck-font-scale, 1)); line-height: 1.6; color: var(--body); }
+  p.fx .katex { font-size: 1em; color: var(--text); }
+  p.fx .sep { margin: 0 .6em; color: var(--body); }
+  p.fx small { font-size: calc(34px * var(--deck-font-scale, 1)); color: var(--body); }
+
+  /* ---------- layout catalog additions (breadth & depth) ---------- */
+  .card--top-rail::before { content:""; position:absolute; inset:0 0 auto 0; height:4px; background: var(--chapter); opacity:.85; }
+  .card--tint-elevated {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--chapter) 12%, var(--ink-3)), var(--ink-2));
+    border-color: color-mix(in srgb, var(--chapter) 40%, var(--hair));
+  }
+  .card--side-border { border-left: 8px solid var(--chapter); border-top: 1px solid var(--hair); }
+
+  /* 2x2 grid & 4-card variations: compact card density to fit within 1080px */
+  .card--grid-2x2, .card--numbered-1-4 {
+    padding: 22px 28px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .card--grid-2x2 h3, .card--numbered-1-4 h3 {
+    font-size: calc(38px * var(--deck-font-scale, 1));
+    line-height: 1.35;
+    margin: 0 0 8px;
+  }
+  .card--grid-2x2 p, .card--numbered-1-4 p {
+    font-size: calc(34px * var(--deck-font-scale, 1));
+    line-height: 1.45;
+    margin: 0;
+  }
+  .card--grid-2x2 .tag, .card--numbered-1-4 .tag {
+    font-size: calc(30px * var(--deck-font-scale, 1));
+    margin-bottom: 6px;
+  }
+
+  .bento { display: grid; gap: 20px; }
+  .bento--left-heavy { grid-template-columns: 1.2fr 1fr; grid-template-rows: 1fr 1fr; }
+  .bento--left-heavy .bento__hero {
+    grid-row: 1 / span 2;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 30px 34px;
+  }
+  .bento--left-heavy .bento__hero h3 {
+    font-size: calc(46px * var(--deck-font-scale, 1));
+    margin: 0 0 10px;
+  }
+  .bento--left-heavy .bento__hero p.lead-size {
+    font-size: calc(38px * var(--deck-font-scale, 1));
+    line-height: 1.55;
+    margin: 0;
+  }
+  .bento--top-heavy { grid-template-columns: 1fr 1fr; grid-template-rows: auto 1fr; }
+  .bento--top-heavy .bento__hero { grid-column: 1 / span 2; }
+  .bento .card:not(.bento__hero) {
+    padding: 22px 28px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .bento .card:not(.bento__hero) h3 {
+    font-size: calc(38px * var(--deck-font-scale, 1));
+    margin: 0 0 8px;
+    line-height: 1.35;
+  }
+  .bento .card:not(.bento__hero) p {
+    font-size: calc(34px * var(--deck-font-scale, 1));
+    line-height: 1.45;
+    margin: 0;
+  }
+  .bento .card:not(.bento__hero) .tag {
+    font-size: calc(30px * var(--deck-font-scale, 1));
+    margin-bottom: 6px;
+  }
+
+  .split-anchor { display: grid; grid-template-columns: 1fr 1.3fr; gap: 40px; align-items: stretch; }
+  .split-anchor__hero { display: flex; flex-direction: column; justify-content: center; }
+  .split-anchor__list { display: flex; flex-direction: column; gap: 20px; justify-content: center; }
+
+  .confront { display: grid; grid-template-columns: 1fr auto 1fr; gap: 28px; align-items: stretch; }
+  .confront__side { padding: 32px 34px; }
+  .confront__vs { display: grid; place-items: center; position: relative; }
+  .confront__badge { width: 64px; height: 64px; border-radius: 50%; background: var(--chapter); color: var(--on-chapter, #07090f); display: grid; place-items: center; font-weight: 800; font-size: calc(26px * var(--deck-font-scale, 1)); }
+
+  .matrix-deepdive { display: grid; grid-template-columns: 1.1fr 1fr; gap: 36px; align-items: center; }
+  /* matrix_width: wide — the typology is the point of the slide, the note supports it */
+  .matrix-deepdive--wide { grid-template-columns: 1.8fr 1fr; }
+  .matrix-deepdive__note { padding: 32px; }
+
+  .quote-critique { display: flex; flex-direction: column; gap: 20px; }
+  .quote-critique__cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+
+  .hypo-test { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: stretch; }
+
+  .stat-hero { display: grid; grid-template-columns: 1fr 1.3fr; gap: 40px; align-items: center; }
+  .stat-hero__num { font-size: calc(110px * var(--deck-font-scale, 1)); font-weight: 800; color: var(--chapter); line-height: 1; }
+  .stat-hero__body { display: flex; flex-direction: column; gap: 20px; }
+
+  /* ---------- numbered list (ol.num) — used by reading-guide 討論問題 ---------- */
+  ol.num { list-style:none; padding:0; margin:0; counter-reset:q; display:grid; gap:20px; }
+  ol.num li { padding-left: 84px; position:relative; line-height:1.5; font-size: calc(40px * var(--deck-font-scale, 1)); counter-increment:q; }
+  ol.num li::before { content:counter(q); position:absolute; left:0; top:0; width:60px; height:60px; border-radius:50%;
+    background:var(--chapter); color:var(--on-chapter, #07090f); font-weight:700; display:grid; place-items:center; font-size: calc(34px * var(--deck-font-scale, 1)); }
+
+  /* ---------- live font size and theme (asset/deck-font-controls.js,
+     asset/deck-theme-controls.js) ----------
+     Every font-size above multiplies by --deck-font-scale so +/− resizes the
+     whole deck for the room without browser zoom, which would also shrink the
+     1920×1080 stage. Colours come only from tokens (fallbacks keep a deck with
+     an older tokens.css unchanged), so c/g can re-theme live. The status
+     toasts are chrome, so they never scale or print. */
+  .deck-font-status {
+    position: fixed; right: 24px; bottom: 24px; z-index: 2147483647;
+    padding: 12px 20px; border: 1px solid var(--hair); border-radius: 12px;
+    background: var(--ink-2); color: var(--text); font: 20px/1.5 var(--font);
+    pointer-events: none;
+  }
+  .deck-theme-status { bottom: 84px; }
+  @media print { .deck-font-status { display: none !important; } }
+
+/* talk-local override (2026-11-11): deck-compile templates emit stat-hero context and
+   split-anchor citations at inline 32px, the bento side-card tag at 30px and the VS badge
+   at 26px — all under the 34px floor deck-check enforces. Lift them to the floor here.
+   This is a framework bug in thesisbug2's compiler templates; drop this block once fixed there. */
+.slide .muted.mt { font-size: calc(34px * var(--deck-font-scale, 1)) !important; }
+.bento .card:not(.bento__hero) .tag { font-size: calc(34px * var(--deck-font-scale, 1)); }
+.confront__badge { font-size: calc(34px * var(--deck-font-scale, 1)); }

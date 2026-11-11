@@ -1,0 +1,3 @@
+<svg class="art" viewBox="0 0 1728 620" width="1728" role="img" aria-label="第二螢幕錄影：板子切畫面，終端鏡像同步重繪" xmlns="http://www.w3.org/2000/svg">
+<rect x="313.0" y="0" width="1102" height="620" rx="18" style="fill:#000"/><foreignObject x="313.0" y="0" width="1102" height="620"><video xmlns="http://www.w3.org/1999/xhtml" src="media/2nd.mp4" poster="media/2nd-poster.jpg" autoplay="" muted="" loop="" playsinline="" style="width:100%;height:100%;object-fit:contain;border-radius:18px;display:block"></video></foreignObject><rect x="313.0" y="0" width="1102" height="620" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/>
+</svg>

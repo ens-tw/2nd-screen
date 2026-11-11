@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<!-- 起始主題（選用）：場地燈光已知時在上面的 <html> 加 data-deck-theme-default，例如教室燈全開
+     <html lang="zh-Hant" data-deck-theme-default="projector-light">；值是 tokens.css --deck-themes 的 id
+     或種子 r4821。不改 tokens.css，因為 ./fw deck-refresh 會用框架版本覆蓋 asset/。
+     優先序：網址 #theme= ＞ 觀眾按 c／g 存下的選擇 ＞ 這個預設 ＞ 主題 1。 -->
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>第二螢幕 — 簡報</title>
+<meta name="description" content="重現 Ledger 硬體植入研究、用 AI 無碼打造被動顯示探針，與 CoolWallet 的 AI 防禦。以 deck-stage 簡報引擎呈現，含講者備註。" />
+
+<!-- 三層資產（由 deck-svg 在建檔時組裝，皆為本地檔、可離線）：
+     · asset/tokens.css      ← house-style：字型 @font-face + 各主題的色盤 token（框架檔，deck-refresh 會更新；本份的起始主題設在 <html>）
+     · asset/deck.css        ← deck-svg：版面／元件／動態（手寫投影片的詞彙）
+     · asset/deck-stage.js   ← deck-runtime：投影片引擎（換頁、列印、講者視窗）
+     · asset/deck-font-controls.js ← deck-svg：全份字級快捷鍵（+／− 每次 10%，80–150%）
+     · asset/deck-theme-controls.js ← deck-svg：c／Shift+C 換主題、g／Shift+G 種子隨機配色
+     · asset/deck-theme-rules.js + deck-palette.js ← house-style：配色規則與檢查／產生器
+     · asset/deck-check.js   ← deck-svg：開 deck.html#debug 時檢查字級下限、溢出與對比，平常不作用
+     · asset/gsap.min.js     ← deck-svg：GSAP 3.15 核心＋外掛（本地合併檔，免費授權、非 MIT），活潑模式的引擎
+     · asset/deck-motion.js ← deck-svg：活潑模式（選用）：元素標 data-beat 逐拍出現、跨頁延續、進頁轉場、變形、沿路徑；M 開關
+     · asset/ENSFont{,-Bold}.woff2 ← house-style：全字集中文字型（Regular＋Bold）
+     · asset/katex/ + deck-math.js ← deck-svg：KaTeX 0.16.11（MIT）離線排版 \( … \) 公式（分鏡的「公式」欄編成 p.fx）
+     手寫的部分只有底下 <deck-stage> 內的投影片與 speaker-notes（及 <html> 的起始主題）。 -->
+<link rel="stylesheet" href="asset/tokens.css" />
+<link rel="stylesheet" href="asset/deck.css" />
+<link rel="stylesheet" href="asset/katex/katex.min.css" />
+</head>
+<body>
+
+<deck-stage width="1920" height="1080">
+
+  <section class="slide hero" data-label="第二螢幕">
+    <div class="railtop"></div>
+    <div class="hero__layers" aria-hidden="true">
+      <div class="grid-layer"></div>
+    </div>
+    <div class="hero__inner">
+      <h1 class="rise" data-beat="0" data-fx="chars" data-dur=".7">第二螢幕</h1>
+      <p class="hero__sub rise d1" data-beat="1">重現 Ledger 硬體植入研究、用 AI 無碼打造被動顯示探針，與 CoolWallet 的 AI 防禦</p>
+      <p class="hero__meta rise d2" data-beat="2">JZ · CoolWallet 內部分享 · 2026-11-11</p>
+    </div>
+    <div class="hero__hint">切換 <kbd>→</kbd> <kbd>←</kbd></div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c4)" data-label="2026 年 10 月，Ledger 出事了">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">新聞</span>
+        <span class="chap"><b>1</b> / 23</span>
+      </div>
+    <div class="content">
+      <h2 class="kicker rise" data-beat="0">2026 年 10 月，Ledger 出事了</h2>
+      <div class="stat-hero mt">
+        <div class="stat-hero__stat rise d1" data-beat="1">
+          <div class="stat-hero__num" data-beat="1" data-fx="scramble" data-dur="1.2">$86M+</div>
+          <div class="lead" style="font-weight:700;margin-top:12px">CryptoBilis 通路植入事件的估計遭竊金額（Specter 估計；Ledger 未公布總額）</div>
+          <p class="muted mt" style="font-size:32px">Ledger 2026-10-10 證實裝置含未授權硬體植入；共同向量為東南亞經銷商 CryptoBilis</p>
+        </div>
+        <div class="stat-hero__body">
+          <div class="card rise d2" data-beat="2">
+            <h3>不是軟體漏洞</h3>
+            <p>是出廠前就被動過手腳的實體裝置</p>
+          </div>          <div class="card rise d3" data-beat="3">
+            <h3>不是單一個案</h3>
+            <p>多國通路、多機型回報</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c1)" data-label="不是單一個案：多國、多機型">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">新聞</span>
+        <span class="chap"><b>2</b> / 23</span>
+      </div>
+    <div class="content canvas-frame">
+      <h2 class="kicker rise">不是單一個案：多國、多機型</h2>
+      
+      <div class="canvas"><div class="rise d2"><svg class="art" viewBox="0 0 1728 480" width="1728" role="img" aria-label="2026 年 10 月各國通路回報的植入裝置照片" xmlns="http://www.w3.org/2000/svg">
+<g data-beat="1" data-fx="pop"><clipPath id="c1-news-de-shelf"><rect x="0" y="0" width="272" height="350" rx="18"/></clipPath><rect x="0" y="0" width="272" height="350" rx="18" style="fill:var(--hair-soft)"/><image href="media/news-de-shelf.jpg" x="0" y="0" width="272" height="350" preserveAspectRatio="xMidYMid slice" clip-path="url(#c1-news-de-shelf)"/><rect x="0" y="0" width="272" height="350" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="136.0" y="402" font-size="42" font-weight="700" text-anchor="middle" style="fill:var(--chapter)">德國</text><text x="136.0" y="452" font-size="40" font-weight="400" text-anchor="middle" style="fill:var(--text)">店內貨架</text></g><g data-beat="1" data-fx="pop" data-delay="0.12"><clipPath id="c2-news-de-lte"><rect x="291" y="0" width="272" height="350" rx="18"/></clipPath><rect x="291" y="0" width="272" height="350" rx="18" style="fill:var(--hair-soft)"/><image href="media/news-de-lte.jpg" x="291" y="0" width="272" height="350" preserveAspectRatio="xMidYMid slice" clip-path="url(#c2-news-de-lte)"/><rect x="291" y="0" width="272" height="350" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="427.0" y="402" font-size="42" font-weight="700" text-anchor="middle" style="fill:var(--chapter)">德國</text><text x="427.0" y="452" font-size="40" font-weight="400" text-anchor="middle" style="fill:var(--text)">Nano X</text></g><g data-beat="1" data-fx="pop" data-delay="0.24"><clipPath id="c3-news-jp-amazon"><rect x="582" y="0" width="272" height="350" rx="18"/></clipPath><rect x="582" y="0" width="272" height="350" rx="18" style="fill:var(--hair-soft)"/><image href="media/news-jp-amazon.jpg" x="582" y="0" width="272" height="350" preserveAspectRatio="xMidYMid slice" clip-path="url(#c3-news-jp-amazon)"/><rect x="582" y="0" width="272" height="350" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="718.0" y="402" font-size="42" font-weight="700" text-anchor="middle" style="fill:var(--chapter)">日本</text><text x="718.0" y="452" font-size="40" font-weight="400" text-anchor="middle" style="fill:var(--text)">Nano X</text></g><g data-beat="1" data-fx="pop" data-delay="0.36"><clipPath id="c4-news-sg-flex"><rect x="874" y="0" width="272" height="350" rx="18"/></clipPath><rect x="874" y="0" width="272" height="350" rx="18" style="fill:var(--hair-soft)"/><image href="media/news-sg-flex.jpg" x="874" y="0" width="272" height="350" preserveAspectRatio="xMidYMid slice" clip-path="url(#c4-news-sg-flex)"/><rect x="874" y="0" width="272" height="350" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="1010.0" y="402" font-size="42" font-weight="700" text-anchor="middle" style="fill:var(--chapter)">新加坡</text><text x="1010.0" y="452" font-size="40" font-weight="400" text-anchor="middle" style="fill:var(--text)">Flex</text></g><g data-beat="1" data-fx="pop" data-delay="0.48"><clipPath id="c5-news-ru-ozon"><rect x="1165" y="0" width="272" height="350" rx="18"/></clipPath><rect x="1165" y="0" width="272" height="350" rx="18" style="fill:var(--hair-soft)"/><image href="media/news-ru-ozon.jpg" x="1165" y="0" width="272" height="350" preserveAspectRatio="xMidYMid slice" clip-path="url(#c5-news-ru-ozon)"/><rect x="1165" y="0" width="272" height="350" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="1301.0" y="402" font-size="42" font-weight="700" text-anchor="middle" style="fill:var(--chapter)">俄羅斯</text><text x="1301.0" y="452" font-size="40" font-weight="400" text-anchor="middle" style="fill:var(--text)">Nano X</text></g><g data-beat="1" data-fx="pop" data-delay="0.60"><clipPath id="c6-news-my-stax"><rect x="1456" y="0" width="272" height="350" rx="18"/></clipPath><rect x="1456" y="0" width="272" height="350" rx="18" style="fill:var(--hair-soft)"/><image href="media/news-my-stax.jpg" x="1456" y="0" width="272" height="350" preserveAspectRatio="xMidYMid slice" clip-path="url(#c6-news-my-stax)"/><rect x="1456" y="0" width="272" height="350" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="1592.0" y="402" font-size="42" font-weight="700" text-anchor="middle" style="fill:var(--chapter)">CryptoBilis</text><text x="1592.0" y="452" font-size="40" font-weight="400" text-anchor="middle" style="fill:var(--text)">Stax</text></g>
+</svg></div></div>
+      <p class="art-cap">照片：Karpelès Lab／Tibane OSINT 追蹤器彙整的公開貼文</p>
+      <div class="verdict box rise d4"><em>重點：</em>德國、日本、新加坡、俄羅斯、東南亞經銷商——Nano X、Flex、Stax 都有</div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c2)" data-label="最反直覺的一點">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">新聞</span>
+        <span class="chap"><b>3</b> / 23</span>
+      </div>
+    <div class="content">
+      <h2 class="kicker rise" data-beat="0">最反直覺的一點</h2>
+      <div class="split-anchor mt">
+        <div class="split-anchor__hero rise d1" data-beat="1">
+          <blockquote class="pull">
+            真機、真安全元件、Genuine Check 全過——因為植入加在它們「之外」
+          </blockquote>
+          <div class="muted mt" style="font-size:32px">出處：Ledger / BleepingComputer, 2026-10</div>
+        </div>
+        <div class="split-anchor__list">
+          <div class="card rise d2" data-beat="2">
+            
+            <h3>安全元件沒被破</h3>
+            <p>植入不改 SE、不改 OS、不改簽章</p>
+          </div>          <div class="card rise d3" data-beat="3">
+            
+            <h3>官方自檢過關</h3>
+            <p>Ledger 也說 Genuine Check 偵測不到加裝的植入</p>
+          </div>          <div class="card rise d4" data-beat="4">
+            
+            <h3>所以難防</h3>
+            <p>使用者沒有訊號知道「這支被動過」</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c4)" data-label="從研究到爆發">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">新聞</span>
+        <span class="chap"><b>4</b> / 23</span>
+      </div>
+    <div class="content">
+      <h2 class="kicker rise" data-beat="0">從研究到爆發</h2>
+      <div class="timeline mt">
+        <div class="tl rise d1" data-beat="1">
+          <time>2025-08</time>
+          <b>Reddit 警告</b>
+          <p>有人在賣會偷幣的 Nano X</p>
+        </div>        <div class="tl rise d2" data-beat="2">
+          <time>2026-05</time>
+          <b>Grand 公開研究</b>
+          <p>Hardwear.io USA 逆向植入</p>
+        </div>        <div class="tl rise d3" data-beat="3">
+          <time>2026-09-16</time>
+          <b>連起來</b>
+          <p>Karpelès 指新批次與 Grand 同源</p>
+        </div>        <div class="tl rise d4" data-beat="4">
+          <time>2026-10-10</time>
+          <b>Ledger 證實</b>
+          <p>要 CryptoBilis 停售</p>
+        </div>        <div class="tl rise d5" data-beat="0">
+          <time>2026-10-13</time>
+          <b>擴大下架</b>
+          <p>東南亞經銷商、MediaMarkt 停售</p>
+        </div>
+      </div>
+      <div class="verdict box rise d4 mt" data-beat="4"><em>歷史啟示：</em>一份研究公開後數月，變成跨國零售事件</div>
+    </div>
+  </section>
+
+  <section class="slide hero" data-label="一、研究">
+    <div class="railtop"></div>
+    <div class="hero__layers" aria-hidden="true">
+      <div class="grid-layer"></div>
+    </div>
+    <div class="hero__inner">
+      <h1 class="rise" data-beat="0" data-fx="chars" data-dur=".7">一、研究</h1>
+      <p class="hero__sub rise d1" data-beat="1">Joe Grand 怎麼逆向這個植入</p>
+      
+    </div>
+    <div class="hero__hint">切換 <kbd>→</kbd> <kbd>←</kbd></div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c1)" data-label="攻擊的要害在哪">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">一、研究</span>
+        <span class="chap"><b>6</b> / 23</span>
+      </div>
+    <div class="content">
+      <h2 class="kicker rise" data-beat="0">攻擊的要害在哪</h2>
+      <div class="split-anchor mt">
+        <div class="split-anchor__hero rise d1" data-beat="1">
+          <blockquote class="pull">
+            不破解安全元件，而是旁聽「控制器→螢幕」那條明文 SPI
+          </blockquote>
+          <div class="muted mt" style="font-size:32px">出處：Grand, Hardwear.io USA 2026, p.36／p.77</div>
+        </div>
+        <div class="split-anchor__list">
+          <div class="card rise d2" data-beat="2">
+            
+            <h3>螢幕是明文</h3>
+            <p>助記詞設定時就顯示在 OLED 上</p>
+          </div>          <div class="card rise d3" data-beat="3">
+            
+            <h3>顯示線可及</h3>
+            <p>裝置內部碰得到那條 SPI</p>
+          </div>          <div class="card rise d4" data-beat="4">
+            
+            <h3>於是</h3>
+            <p>被動聽就能把畫面讀出來</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c2)" data-label="植入三要素（SP1／SP2／SP3）">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">一、研究</span>
+        <span class="chap"><b>7</b> / 23</span>
+      </div>
+    <div class="content canvas-frame">
+      <h2 class="kicker rise">植入三要素（SP1／SP2／SP3）</h2>
+      
+      <div class="canvas"><div class="rise d2"><svg class="art" viewBox="0 0 1728 500" width="1728" role="img" aria-label="植入三要素：縮電池、位置、接線（Joe Grand 實照）" xmlns="http://www.w3.org/2000/svg">
+<g data-beat="1" data-fx="pop"><clipPath id="c7-sp1"><rect x="0" y="0" width="560" height="320" rx="18"/></clipPath><rect x="0" y="0" width="560" height="320" rx="18" style="fill:var(--hair-soft)"/><image href="media/sp1.jpg" x="0" y="0" width="560" height="320" preserveAspectRatio="xMidYMid meet" clip-path="url(#c7-sp1)"/><rect x="0" y="0" width="560" height="320" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="0" y="378" font-size="44" font-weight="700" text-anchor="start" style="fill:var(--chapter)">SP1 騰出空間</text><text x="0" y="434.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">電池 100→70 mAh</text><text x="0" y="486.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">電量計永遠顯示 100%</text></g><g data-beat="2" data-fx="pop"><clipPath id="c8-sp2"><rect x="584" y="0" width="560" height="320" rx="18"/></clipPath><rect x="584" y="0" width="560" height="320" rx="18" style="fill:var(--hair-soft)"/><image href="media/sp2.jpg" x="584" y="0" width="560" height="320" preserveAspectRatio="xMidYMid meet" clip-path="url(#c8-sp2)"/><rect x="584" y="0" width="560" height="320" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="584" y="378" font-size="44" font-weight="700" text-anchor="start" style="fill:var(--chapter)">SP2 植入位置</text><text x="584" y="434.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">塞進電池讓出的腔體</text><text x="584" y="486.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">搭上 OLED 的 SPI</text></g><g data-beat="3" data-fx="pop"><clipPath id="c9-sp3"><rect x="1168" y="0" width="560" height="320" rx="18"/></clipPath><rect x="1168" y="0" width="560" height="320" rx="18" style="fill:var(--hair-soft)"/><image href="media/sp3.jpg" x="1168" y="0" width="560" height="320" preserveAspectRatio="xMidYMid meet" clip-path="url(#c9-sp3)"/><rect x="1168" y="0" width="560" height="320" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="1168" y="378" font-size="44" font-weight="700" text-anchor="start" style="fill:var(--chapter)">SP3 植入接線</text><text x="1168" y="434.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">獨立小板接到主板</text><text x="1168" y="486.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">不碰安全元件</text></g>
+</svg></div></div>
+      <p class="art-cap">照片：Joe Grand, Hardwear.io USA 2026 投影片</p>
+      <div class="verdict box rise d4"><em>重點：</em>植入吃掉裝置內部的物理餘裕，從外觀看不出來</div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c1)" data-label="拆開看：一塊小板、四個零件">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">一、研究</span>
+        <span class="chap"><b>8</b> / 23</span>
+      </div>
+    <div class="content canvas-frame">
+      <h2 class="kicker rise">拆開看：一塊小板、四個零件</h2>
+      
+      <div class="canvas"><div class="rise d2"><svg class="art" viewBox="0 0 1728 500" width="1728" role="img" aria-label="植入板零件：MCU、4G 模組、eSIM、天線（Joe Grand 投影片 p.66）" xmlns="http://www.w3.org/2000/svg">
+<clipPath id="c10-grand-p66"><rect x="0" y="0" width="880" height="495" rx="18"/></clipPath><rect x="0" y="0" width="880" height="495" rx="18" style="fill:var(--hair-soft)"/><image href="media/grand-p66.jpg" x="0" y="0" width="880" height="495" preserveAspectRatio="xMidYMid meet" clip-path="url(#c10-grand-p66)"/><rect x="0" y="0" width="880" height="495" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><g data-beat="1" data-fx="fadeup"><text x="940" y="54" font-size="46" font-weight="700" text-anchor="start" style="fill:var(--chapter)">MCU</text><text x="940" y="108" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">Cortex-M0+，晶片無標記</text></g><g data-beat="2" data-fx="fadeup"><text x="940" y="174" font-size="46" font-weight="700" text-anchor="start" style="fill:var(--chapter)">4G 模組</text><text x="940" y="228" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">Luat Air700E（Cat.1bis）</text></g><g data-beat="3" data-fx="fadeup"><text x="940" y="294" font-size="46" font-weight="700" text-anchor="start" style="fill:var(--chapter)">eSIM</text><text x="940" y="348" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">荷蘭 Vodafone「DATA ONLY」</text></g><g data-beat="4" data-fx="fadeup"><text x="940" y="414" font-size="46" font-weight="700" text-anchor="start" style="fill:var(--chapter)">天線</text><text x="940" y="468" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">手繞線圈</text></g>
+</svg></div></div>
+      <p class="art-cap">Joe Grand 投影片 p.66（零件標註為原作者所加）</p>
+      <div class="verdict box rise d4"><em>重點：</em>MCU 讀螢幕、4G 模組加 eSIM 負責外送</div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c4)" data-label="韌體怎麼把螢幕變成助記詞">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">一、研究</span>
+        <span class="chap"><b>9</b> / 23</span>
+      </div>
+    <div class="content">
+      <h2 class="kicker rise" data-beat="0">韌體怎麼把螢幕變成助記詞</h2>
+      
+      <div class="flowdiag mt">
+        <div class="flownode rise d1" data-beat="1" data-fx="pop">
+          <h3>監看 SPI</h3>
+          <p>旁聽 Secure Element↔OLED 的匯流排</p>
+        </div>        <div class="flowarrow">→</div>        <div class="flownode rise d2" data-beat="2" data-fx="pop">
+          <h3>樣板比對</h3>
+          <p>用 flash 內 a–z 字形比對畫面字母</p>
+        </div>        <div class="flowarrow">→</div>        <div class="flownode rise d3" data-beat="3" data-fx="pop">
+          <h3>外送</h3>
+          <p>湊出助記詞存 flash，經 4G LTE 送出</p>
+        </div>
+      </div>
+      <div class="verdict box rise d4 mt" data-beat="4"><em>最終均衡：</em>外洩的是「螢幕上顯示的明文」，不是破解出來的密鑰</div>
+    </div>
+  </section>
+
+  <section class="slide hero" data-label="二、復刻">
+    <div class="railtop"></div>
+    <div class="hero__layers" aria-hidden="true">
+      <div class="grid-layer"></div>
+    </div>
+    <div class="hero__inner">
+      <h1 class="rise" data-beat="0" data-fx="chars" data-dur=".7">二、復刻</h1>
+      <p class="hero__sub rise d1" data-beat="1">jz 版：被動顯示探針</p>
+      
+    </div>
+    <div class="hero__hint">切換 <kbd>→</kbd> <kbd>←</kbd></div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c1)" data-label="我復刻什麼、刻意不做什麼">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">二、復刻</span>
+        <span class="chap"><b>11</b> / 23</span>
+      </div>
+    <div class="content">
+      <h2 class="kicker rise" data-beat="0">我復刻什麼、刻意不做什麼</h2>
+      <p class="lead rise" style="color:var(--text);font-weight:700" data-beat="0">要證明「我懂這條攻擊線」，但不做一個真的武器</p>
+      <div class="confront mt">
+        <div class="card confront__side rise d1" data-beat="1">
+          <span class="tag">研究者植入</span>
+          <ul class="clean lead-size mt">
+            <li>主動植入在裝置內</li><li>4G 外洩助記詞</li><li>鎖定錢包備份</li>
+          </ul>
+        </div>
+        <div class="confront__vs rise d2" data-beat="2">
+          <div class="confront__badge">VS</div>
+        </div>
+        <div class="card confront__side rise d1" data-beat="1">
+          <span class="tag" style="color:var(--text)">jz 第二螢幕</span>
+          <ul class="clean lead-size mt">
+            <li>被動高阻抗、只讀</li><li>不接 MISO、不接 +5V</li><li>主動回寫路線已刻意移除</li>
+          </ul>
+        </div>
+      </div>
+      <div class="verdict box rise d3" data-beat="3"><em>裁決／提問：</em>只取最要害那一段：被動旁聽顯示線，把螢幕讀出來</div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c4)" data-label="四條線，被動搭上一支 Nano X">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">二、復刻</span>
+        <span class="chap"><b>12</b> / 23</span>
+      </div>
+    <div class="content canvas-frame">
+      <h2 class="kicker rise">四條線，被動搭上一支 Nano X</h2>
+      
+      <div class="canvas"><div class="rise d2"><svg class="art" viewBox="0 0 1728 545" width="1728" role="img" aria-label="四線被動探針接在 Ledger Nano X 的顯示測試點" xmlns="http://www.w3.org/2000/svg">
+<g data-beat="1" data-fx="fadeup"><clipPath id="c11-wire"><rect x="0" y="0" width="720" height="466" rx="18"/></clipPath><rect x="0" y="0" width="720" height="466" rx="18" style="fill:var(--hair-soft)"/><image href="media/wire.jpg" x="0" y="0" width="720" height="466" preserveAspectRatio="xMidYMid slice" clip-path="url(#c11-wire)"/><rect x="0" y="0" width="720" height="466" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="0" y="522" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">Nano X 主板的測試點（手寫標註）</text></g><g data-beat="2" data-fx="fadeup"><clipPath id="c12-jz-version"><rect x="752" y="0" width="350" height="466" rx="18"/></clipPath><rect x="752" y="0" width="350" height="466" rx="18" style="fill:var(--hair-soft)"/><image href="media/jz-version.jpg" x="752" y="0" width="350" height="466" preserveAspectRatio="xMidYMid slice" clip-path="url(#c12-jz-version)"/><rect x="752" y="0" width="350" height="466" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="752" y="522" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">接上 Feather RP2040</text></g><g data-beat="3" data-fx="fadeup"><text x="1160" y="50" font-size="44" font-weight="700" text-anchor="start" style="fill:var(--chapter)">只接四條</text><text x="1160" y="116.0" font-size="42" font-weight="400" text-anchor="start" style="fill:var(--text)">CS</text><text x="1160" y="170.6" font-size="42" font-weight="400" text-anchor="start" style="fill:var(--text)">CLK</text><text x="1160" y="225.2" font-size="42" font-weight="400" text-anchor="start" style="fill:var(--text)">DAT</text><text x="1160" y="279.8" font-size="42" font-weight="400" text-anchor="start" style="fill:var(--text)">GND</text><text x="1160" y="370" font-size="44" font-weight="700" text-anchor="start" style="fill:var(--chapter)">不接</text><text x="1160" y="436.0" font-size="42" font-weight="400" text-anchor="start" style="fill:var(--text)">+5V、ON</text></g>
+</svg></div></div>
+      
+      <div class="verdict box rise d4"><em>重點：</em>GPIO 全程輸入、硬體鎖成永不驅動；手法適用任何「控制器→OLED 明文 SPI」</div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c1)" data-label="真板證據：它真的讀得到">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">二、復刻</span>
+        <span class="chap"><b>13</b> / 23</span>
+      </div>
+    <div class="content">
+      <h2 class="kicker rise" data-beat="0">真板證據：它真的讀得到</h2>
+      
+      <div class="grid three mt">
+          <div class="card card--top-rail rise d1" data-beat="1" data-fx="pop">
+            <span class="tag">靜態</span>
+            <h3>0 邊緣/秒</h3>
+            <p>不切畫面時匯流排閒置</p>
+          </div>          <div class="card card--top-rail rise d2" data-beat="2" data-fx="pop">
+            <span class="tag">切畫面</span>
+            <h3>≈8312 邊緣/重繪</h3>
+            <p>一次重繪 ≈ 一張 128×64 全畫面</p>
+          </div>          <div class="card card--top-rail rise d3" data-beat="3" data-fx="pop">
+            <span class="tag">擷取</span>
+            <h3>12,480 B</h3>
+            <p>重建出肉眼可讀的字形</p>
+          </div>
+      </div>
+      <div class="verdict box rise d4" data-beat="4"><em>結論：</em>被動搭四線，就能即時旁觀顯示內容——真機證實</div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c4)" data-label="第二螢幕">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">二、復刻</span>
+        <span class="chap"><b>14</b> / 23</span>
+      </div>
+    <div class="content canvas-frame">
+      <h2 class="kicker rise">第二螢幕</h2>
+      
+      <div class="canvas"><div class="rise d2"><svg class="art" viewBox="0 0 1728 620" width="1728" role="img" aria-label="第二螢幕錄影：板子切畫面，終端鏡像同步重繪" xmlns="http://www.w3.org/2000/svg">
+<rect x="313.0" y="0" width="1102" height="620" rx="18" style="fill:#000"/><foreignObject x="313.0" y="0" width="1102" height="620"><video xmlns="http://www.w3.org/1999/xhtml" src="media/2nd.mp4" poster="media/2nd-poster.jpg" autoplay="" muted="" loop="" playsinline="" style="width:100%;height:100%;object-fit:contain;border-radius:18px;display:block"></video></foreignObject><rect x="313.0" y="0" width="1102" height="620" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/>
+</svg></div></div>
+      <p class="art-cap">錄影 2nd.MP4（24 秒）；現場可改跑 live_mirror.py</p>
+      <div class="verdict box rise d4"><em>重點：</em>在裝置上切畫面，終端裡的鏡像同步跟著變</div>
+    </div>
+  </section>
+
+  <section class="slide hero" data-label="三、無碼與 AI 協作">
+    <div class="railtop"></div>
+    <div class="hero__layers" aria-hidden="true">
+      <div class="grid-layer"></div>
+    </div>
+    <div class="hero__inner">
+      <h1 class="rise" data-beat="0" data-fx="chars" data-dur=".7">三、無碼與 AI 協作</h1>
+      <p class="hero__sub rise d1" data-beat="1">Joe 手工做的，我用 AI 換掉哪些</p>
+      
+    </div>
+    <div class="hero__hint">切換 <kbd>→</kbd> <kbd>←</kbd></div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c1)" data-label="置換對照：Joe 手工 → jz 用 AI">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">三、AI 協作</span>
+        <span class="chap"><b>16</b> / 23</span>
+      </div>
+    <div class="content canvas-frame">
+      <h2 class="kicker rise">置換對照：Joe 手工 → jz 用 AI</h2>
+      <p class="lead rise d1">四個環節：三個由 AI 起草、一個由 AI 導引</p>
+      <div class="canvas"><div class="rise d2"><svg class="art" viewBox="0 0 1728 590" width="1728" role="img" aria-label="置換對照：Joe 手工四環節，jz 版由 AI 起草、我真板驗收" xmlns="http://www.w3.org/2000/svg">
+<rect x="0" y="0" width="1728" height="70" rx="12" style="fill:var(--chapter);opacity:.18"/><text x="20" y="50" font-size="40" font-weight="700" text-anchor="start" style="fill:var(--text)">環節</text><text x="290" y="50" font-size="40" font-weight="700" text-anchor="start" style="fill:var(--text)">Joe 怎麼做（手工）</text><text x="740" y="50" font-size="40" font-weight="700" text-anchor="start" style="fill:var(--text)">jz：AI 起草</text><text x="1260" y="50" font-size="40" font-weight="700" text-anchor="start" style="fill:var(--text)">我：真板驗收</text><g data-beat="1" data-fx="fadeup"><line x1="0" y1="206" x2="1728" y2="206" style="stroke:var(--hair);stroke-width:2"/><text x="20" y="156" font-size="44" font-weight="700" text-anchor="start" style="fill:var(--text)">協定分析</text><text x="290" y="134.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">Logic Pro 8 抓波形</text><text x="290" y="186.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">手工判讀</text><rect x="720" y="90" width="500" height="108" rx="12" style="fill:var(--accent-soft);opacity:.5"/><text x="740" y="134.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">由擷取流推回</text><text x="740" y="186.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">SSD1306 命令表</text><path d="M1256 126.7 L1268.92 138.6 L1290 111.4" style="fill:none;stroke:var(--chapter);stroke-width:6;stroke-linecap:round;stroke-linejoin:round"/><text x="1306" y="134.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">真機八頁序列核對</text><text x="1306" y="186.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">型號未確認就標明</text></g><g data-beat="2" data-fx="fadeup"><line x1="0" y1="332" x2="1728" y2="332" style="stroke:var(--hair);stroke-width:2"/><text x="20" y="282" font-size="44" font-weight="700" text-anchor="start" style="fill:var(--text)">解碼器</text><text x="290" y="260.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">韌體內 a–z</text><text x="290" y="312.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">字形樣板比對</text><rect x="720" y="216" width="500" height="108" rx="12" style="fill:var(--accent-soft);opacity:.5"/><text x="740" y="260.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">欄位元組→畫面緩衝</text><text x="740" y="312.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">→ ASCII 鏡像</text><path d="M1256 252.7 L1268.92 264.6 L1290 237.4" style="fill:none;stroke:var(--chapter);stroke-width:6;stroke-linecap:round;stroke-linejoin:round"/><text x="1306" y="260.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">肉眼對照</text><text x="1306" y="312.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">實體螢幕一致</text></g><g data-beat="3" data-fx="fadeup"><line x1="0" y1="458" x2="1728" y2="458" style="stroke:var(--hair);stroke-width:2"/><text x="20" y="408" font-size="44" font-weight="700" text-anchor="start" style="fill:var(--text)">編碼器</text><text x="290" y="386.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">擷取→存 flash</text><text x="290" y="438.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">→ 4G 外送</text><rect x="720" y="342" width="500" height="108" rx="12" style="fill:var(--accent-soft);opacity:.5"/><text x="740" y="386.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">PIO＋DMA＋USB 串流</text><text x="740" y="438.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">只讀、不外洩</text><path d="M1256 378.7 L1268.92 390.6 L1290 363.4" style="fill:none;stroke:var(--chapter);stroke-width:6;stroke-linecap:round;stroke-linejoin:round"/><text x="1306" y="386.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">loopback 零錯</text><text x="1306" y="438.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">真板抓出 bit-slip</text></g><g data-beat="4" data-fx="fadeup"><line x1="0" y1="584" x2="1728" y2="584" style="stroke:var(--hair);stroke-width:2"/><text x="20" y="534" font-size="44" font-weight="700" text-anchor="start" style="fill:var(--text)">接線</text><text x="290" y="512.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">顯微焊上</text><text x="290" y="564.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">植入板</text><rect x="720" y="468" width="500" height="108" rx="12" style="fill:var(--accent-soft);opacity:.5"/><text x="740" y="512.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">避開 Feather 絲印坑</text><text x="740" y="564.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">選相鄰數位腳</text><path d="M1256 504.7 L1268.92 516.6 L1290 489.4" style="fill:none;stroke:var(--chapter);stroke-width:6;stroke-linecap:round;stroke-linejoin:round"/><text x="1306" y="512.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">電表復驗</text><text x="1306" y="564.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">先通電再搭線</text></g>
+</svg></div></div>
+      
+      <div class="verdict box rise d4"><em>重點：</em>每一列最右欄「真板驗收」都還是我做的</div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c3)" data-label="① 協定分析（S1）">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">三、AI 協作</span>
+        <span class="chap"><b>17</b> / 23</span>
+      </div>
+    <div class="content canvas-frame">
+      <h2 class="kicker rise">① 協定分析（S1）</h2>
+      
+      <div class="canvas"><div class="rise d2"><svg class="art" viewBox="0 0 1728 540" width="1728" role="img" aria-label="協定分析：Joe 手工判讀 vs AI 起草加真板核對" xmlns="http://www.w3.org/2000/svg">
+<clipPath id="c13-grand-p41"><rect x="0" y="0" width="820" height="461" rx="18"/></clipPath><rect x="0" y="0" width="820" height="461" rx="18" style="fill:var(--hair-soft)"/><image href="media/grand-p41.jpg" x="0" y="0" width="820" height="461" preserveAspectRatio="xMidYMid meet" clip-path="url(#c13-grand-p41)"/><rect x="0" y="0" width="820" height="461" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="0" y="520" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">Joe：Logic Pro 8 手工判讀 SPI</text><g data-beat="1" data-fx="fadeup"><text x="880" y="50" font-size="44" font-weight="700" text-anchor="start" style="fill:var(--chapter)">AI 起草</text><text x="880" y="106.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">由擷取流推回</text><text x="880" y="158.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">SSD1306 命令表</text></g><g data-beat="2" data-fx="fadeup"><text x="880" y="218" font-size="44" font-weight="700" text-anchor="start" style="fill:var(--chapter)">我核對</text><text x="880" y="274.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">真機八頁序列</text><text x="880" y="326.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">欄定址重建規則</text></g><g data-beat="3" data-fx="fadeup"><text x="880" y="386" font-size="44" font-weight="700" text-anchor="start" style="fill:var(--chapter)">我設限</text><text x="880" y="442.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">型號未確認就標明</text><text x="880" y="494.0" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">不明位元組保留</text></g>
+</svg></div></div>
+      <p class="art-cap">左圖：Joe Grand 投影片 p.41</p>
+      <div class="verdict box rise d4"><em>重點：</em>AI 給假設，真板給證據</div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c1)" data-label="② 編碼器（S3）：bit-slip">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">三、AI 協作</span>
+        <span class="chap"><b>18</b> / 23</span>
+      </div>
+    <div class="content">
+      <h2 class="kicker rise" data-beat="0">② 編碼器（S3）：bit-slip</h2>
+      <div class="hypo-test mt">
+        <div class="card rise d1" data-beat="1">
+          <span class="tag">AI 初版 PIO</span>
+          <h3>每個 CLK 邊緣取樣 DI，湊成 byte</h3>
+          <p class="mt">看起來對，loopback 自測也過</p>
+        </div>
+        <div class="card card--tint-elevated rise d2" data-beat="2">
+          <span class="tag" style="color:var(--text)">真板現象：舊 PIO 碰不到 CS 拉高，多一個 bit 就一直錯位</span>
+          <h3>第 15 包起全部右移 1 bit，畫面停住</h3>
+        </div>
+      </div>
+      <div class="verdict box rise d3 mt" data-beat="3"><em>理論謎題／意涵：</em>改成每脈衝只取 8 bit 並清殘留：注入測試 193/193、未注入 578/578 包對齊</div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c2)" data-label="③ 解碼器（S2）：同一手法，相反用途">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">三、AI 協作</span>
+        <span class="chap"><b>19</b> / 23</span>
+      </div>
+    <div class="content canvas-frame">
+      <h2 class="kicker rise">③ 解碼器（S2）：同一手法，相反用途</h2>
+      <p class="lead rise d1">AI 起草主機端重建，我肉眼對照驗收</p>
+      <div class="canvas"><div class="rise d2"><svg class="art" viewBox="0 0 1728 480" width="1728" role="img" aria-label="解碼器：Joe 的植入解碼 vs jz 的主機端重建" xmlns="http://www.w3.org/2000/svg">
+<g data-beat="1" data-fx="fadeup"><clipPath id="c14-grand-p71"><rect x="0" y="0" width="720" height="405" rx="18"/></clipPath><rect x="0" y="0" width="720" height="405" rx="18" style="fill:var(--hair-soft)"/><image href="media/grand-p71.jpg" x="0" y="0" width="720" height="405" preserveAspectRatio="xMidYMid meet" clip-path="url(#c14-grand-p71)"/><rect x="0" y="0" width="720" height="405" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="0" y="462" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">Joe：植入把字形比對成助記詞</text></g><path d="M828 202 L896 202" style="stroke:var(--chapter);stroke-width:8;stroke-linecap:round"/><path d="M876 182 L900 202 L876 222" style="fill:none;stroke:var(--chapter);stroke-width:8;stroke-linecap:round;stroke-linejoin:round"/><g data-beat="2" data-fx="fadeup"><clipPath id="c15-2nd-poster"><rect x="1008" y="0" width="720" height="405" rx="18"/></clipPath><rect x="1008" y="0" width="720" height="405" rx="18" style="fill:var(--hair-soft)"/><image href="media/2nd-poster.jpg" x="1008" y="0" width="720" height="405" preserveAspectRatio="xMidYMid slice" clip-path="url(#c15-2nd-poster)"/><rect x="1008" y="0" width="720" height="405" rx="18" style="fill:none;stroke:var(--hair);stroke-width:2"/><text x="1008" y="462" font-size="40" font-weight="400" text-anchor="start" style="fill:var(--text)">jz：主機端把位元組重建成畫面</text></g>
+</svg></div></div>
+      <p class="art-cap">左圖：Joe Grand 投影片 p.71；右圖：2nd.MP4 截圖</p>
+      <div class="verdict box rise d4"><em>重點：</em>解碼器從「裝置內竊取」挪到「主機端重建」</div>
+    </div>
+  </section>
+
+  <section class="slide hero" data-label="四、結論">
+    <div class="railtop"></div>
+    <div class="hero__layers" aria-hidden="true">
+      <div class="grid-layer"></div>
+    </div>
+    <div class="hero__inner">
+      <h1 class="rise" data-beat="0" data-fx="chars" data-dur=".7">四、結論</h1>
+      <p class="hero__sub rise d1" data-beat="1">AI 時代的攻防，與 CoolWallet 的防線</p>
+      
+    </div>
+    <div class="hero__hint">切換 <kbd>→</kbd> <kbd>←</kbd></div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c1)" data-label="復刻成本，對稱地崩塌了">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">四、結論</span>
+        <span class="chap"><b>21</b> / 23</span>
+      </div>
+    <div class="content">
+      <h2 class="kicker rise" data-beat="0">復刻成本，對稱地崩塌了</h2>
+      
+      <div class="bento bento--top-heavy mt">
+        <div class="card card--tint-elevated bento__hero rise d1" data-beat="1" data-fx="pop">
+          <span class="tag">核心主張</span>
+          <h3>世界級數週 → 一人 AI 數天</h3>
+          <p class="lead-size">同一股力量同時降低攻擊者造植入、和防禦者做驗證的成本。本專案就是一個人用 AI 幾天復刻核心手法的例子。</p>
+        </div>
+          <div class="card rise d2" data-beat="2" data-fx="pop">
+            <span class="tag">仍然稀缺</span>
+            <h3>物理可及</h3>
+            <p>AI 不會幫攻擊者拿到你手上的裝置</p>
+          </div>          <div class="card rise d3" data-beat="3" data-fx="pop">
+            <span class="tag">仍然稀缺</span>
+            <h3>可驗證性</h3>
+            <p>也不會自動證明你這支沒被動過</p>
+          </div>
+      </div>
+      <div class="verdict box rise d4" data-beat="4"><em>定論：</em>不對稱移到了供應鏈完整性與可驗證性</div>
+    </div>
+  </section>
+
+  <section class="slide" style="--chapter:var(--c4)" data-label="CoolWallet 該先守哪一層">
+      <div class="railtop"></div>
+      <div class="topbar">
+        <span class="eyebrow">四、結論</span>
+        <span class="chap"><b>22</b> / 23</span>
+      </div>
+    <div class="content">
+      <h2 class="kicker rise" data-beat="0">CoolWallet 該先守哪一層</h2>
+      <div class="tiers mt">
+        <div class="tier rise d1" data-beat="1">
+          <div style="font-weight:700;color:var(--chapter);font-size:36px">層級 1</div>
+          <div>
+            <h3 style="font-size:42px;margin:0 0 6px">顯示鏈加密 / MAC</h3>
+            <p style="margin:0;font-size:36px;color:var(--body)">被動擷取只拿到密文，直接擋住這類攻擊</p>
+          </div>
+        </div>        <div class="tier rise d2" data-beat="2">
+          <div style="font-weight:700;color:var(--chapter);font-size:36px">層級 2</div>
+          <div>
+            <h3 style="font-size:42px;margin:0 0 6px">走線納入安全邊界</h3>
+            <p style="margin:0;font-size:36px;color:var(--body)">控制器直驅、走線不可及、無測試點</p>
+          </div>
+        </div>        <div class="tier rise d3" data-beat="3">
+          <div style="font-weight:700;color:var(--chapter);font-size:36px">層級 3</div>
+          <div>
+            <h3 style="font-size:42px;margin:0 0 6px">物理防護＋開殼偵測</h3>
+            <p style="margin:0;font-size:36px;color:var(--body)">灌膠、防拆網、外殼與主板配對</p>
+          </div>
+        </div>
+      </div>
+      <div class="verdict box rise d4 mt" data-beat="4"><em>核心焦點：</em>這三層的檢查都能從人工變成 AI 可規模化驗證——AI 賦能防禦的著力點</div>
+    </div>
+  </section>
+
+  <section class="slide finale" data-label="結語">
+    <div class="railtop"></div>
+    <div class="content">
+      <h2 class="rise" data-beat="0">結語</h2>
+      <p class="onesentence rise d1" data-beat="1">AI 時代仍然可信的，不是「AI 做的所以對」，而是事實分級＋真板驗收＋保留不臆測的紀律。</p>
+      <ul class="clean lead-size rise d2 mt" style="text-align:left" data-beat="2"><li>攻防復刻成本對稱崩塌，稀缺的是物理可及與可驗證性</li><li>顯示鏈明文可及就守不住</li><li>討論</li></ul>
+    </div>
+  </section>
+
+  <script type="application/json" id="speaker-notes">
+[
+"第二螢幕\n【講法】\n・今天用一條真實發生的攻擊鏈，談 AI 怎麼改變硬體攻防的成本。\n・預告結構：新聞 → Joe Grand 的研究 → 我的復刻 → AI 在裡面做了什麼 → 對 CoolWallet 的意義。（0.5 分）",
+"2026 年 10 月，Ledger 出事了\n【講法】\n・數字會從亂碼解出來，停一拍再講。\n・$86M+ 是調查員 Specter 的估計（Decrypt，10-09）；其他估計是 $93M 到 $103M，Tether 凍結了約 $10M。Ledger 自己沒有公布總額——這點要講清楚，數字是估計。\n・確定的是：Ledger 10-10 證實「一名受影響使用者的裝置內含未授權硬體植入」，共同向量是東南亞經銷商 CryptoBilis。\n・轉場：這不是軟體漏洞，是出廠前就被動過手腳的實體裝置。下一張看它有多普遍。\n【名詞】\n・Secure Element：防竄改的安全晶片，保管私鑰／助記詞，是硬體錢包的信任根。\n【提問】\n・Q1 植入會偷走私鑰或改交易嗎？\n　不會改交易或簽章；它偷的是「螢幕上顯示的明文助記詞」，由此在別處重建錢包。",
+"不是單一個案：多國、多機型\n【講法】\n・按一下，六張照片依序彈出。\n・指出第一張：MediaMarkt 店內貨架——德國實體門市買的也中，MediaMarkt 10-13 停售 Ledger。\n・日本 Amazon 那支（Tibane Specimen B）用的是 nRF9151；新加坡 Challenger 是 Flex；俄羅斯 Ozon 是 Nano X；最後是 CryptoBilis 賣出的 Stax。\n・注意：追蹤器裡也有兩支是仿冒品（沒有安全元件），不是植入；今天講的是植入。\n・照片來源是 Karpelès Lab／Tibane 的公開 OSINT 追蹤器。（1.5 分）\n【名詞】\n・OSINT：公開來源情報；本案指把社群貼文、影片、報導彙整成可查證的事件清單。\n【提問】\n・Q2 這和 Joe Grand 的研究是同一件事嗎？\n　手法同源。Grand 的樣本被標為「Generation 1」，10 月批次用相同手法、隱藏更好、部分改用 nRF9151。",
+"最反直覺的一點\n【講法】\n・一拍一拍出：安全元件沒被破、官方自檢過關、所以難防。\n・Ledger 10-13 說明：植入不改 Secure Element、不改 OS、不改簽章；它是在設定時從螢幕讀走 24 個字，再用 eSIM 走 LTE 送出。\n・Genuine Check 會過，因為安全元件是真的；Ledger 自己也承認它偵測不到「加裝的」植入。\n・這一點決定後面所有防禦的方向：不能只信「元件是真的」。（1.5 分）\n【名詞】\n・Genuine Check：Ledger 用來驗證裝置安全元件為正品的線上自檢。\n・Secure Element：防竄改的安全晶片，保管私鑰／助記詞，是硬體錢包的信任根。\n【提問】\n・Q1 植入會偷走私鑰或改交易嗎？\n　不會改交易或簽章；它偷的是「螢幕上顯示的明文助記詞」，由此在別處重建錢包。",
+"從研究到爆發\n【講法】\n・2025-08 Reddit 有人警告泰國市集在賣會偷幣的 Nano X——這是 Joe Grand 的起點。\n・Grand 2026-03 已通報 Ledger，2026-05 在 Hardwear.io USA 公開；9 月 Karpelès 把新批次跟 Grand 的研究連起來；10 月 Ledger 證實並要求下架。\n・重點是節奏：一份研究公開後幾個月，就變成跨國零售事件。（1.5 分）\n【提問】\n・Q2 這和 Joe Grand 的研究是同一件事嗎？\n　手法同源。Grand 的樣本被標為「Generation 1」，10 月批次用相同手法、隱藏更好、部分改用 nRF9151。",
+"一、研究\n【講法】\n・轉場：先看世界級硬體駭客怎麼拆這個東西。",
+"攻擊的要害在哪\n【講法】\n・全場最重要的一個觀念：攻擊不破解安全元件，而是旁聽「控制器→螢幕」那條明文 SPI。\n・助記詞在設定時以明文顯示在 OLED 上；裝置內部碰得到那條線；被動聽就能把畫面讀出來。\n・Grand 的總結（投影片 p.77）就是這句話。請大家記住「明文顯示鏈」，我的復刻就鎖定這一段。（2 分）\n【名詞】\n・SPI：序列周邊介面，主控與周邊間的四線同步串列匯流排（時脈 CLK、資料、選擇 CS）。\n・OLED：點陣自發光顯示器；助記詞設定時就以明文顯示在上面。\n【提問】\n・Q3 為什麼不直接攻擊 Secure Element？\n　因為沒必要——螢幕是明文、顯示線可及，旁聽顯示線比破解安全晶片容易得多。",
+"植入三要素（SP1／SP2／SP3）\n【講法】\n・一按一張。\n・SP1：電池從 100 mAh 換成 70 mAh 騰出空間；用固定電阻取代熱敏電阻，電量計被旁路成永遠 100%——使用者看不出電池變小。\n・SP2：植入板塞進電池讓出的腔體，搭上 OLED 的 SPI。\n・SP3：一塊獨立小板接到主板，完全不碰安全元件。\n・收束：植入吃掉的是裝置內部的物理餘裕，從外觀看不出來。（2.5 分）\n【名詞】\n・Li-Po：鋰聚合物電池；植入者把原廠 100 mAh 電池換成 70 mAh 的小顆來騰出空間。\n【提問】\n・Q3 為什麼不直接攻擊 Secure Element？\n　因為沒必要——螢幕是明文、顯示線可及，旁聽顯示線比破解安全晶片容易得多。",
+"拆開看：一塊小板、四個零件\n【講法】\n・圖是 Grand 投影片 p.66，零件標註是他加的。\n・MCU 是一顆 Cortex-M0+，晶片表面沒有標記；4G 模組是 Luat Air700E；eSIM 讀出來是荷蘭 Vodafone、名稱「DATA ONLY」的漫遊資料卡；天線是手繞線圈。\n・分工：MCU 讀螢幕，4G 模組加 eSIM 負責外送。（1.5 分）\n【名詞】\n・MCU：微控制器；植入板上那顆 Cortex-M0+ 負責讀螢幕、比對字形、交給 4G 模組送出。\n・eSIM：嵌入式 SIM（MFF2 封裝），植入用它連行動網路外送資料。\n【提問】\n・Q3 為什麼不直接攻擊 Secure Element？\n　因為沒必要——螢幕是明文、顯示線可及，旁聽顯示線比破解安全晶片容易得多。",
+"韌體怎麼把螢幕變成助記詞\n【講法】\n・Grand 從 SWD 把 MCU 的 flash 讀出來逆向。\n・三步：監看 Secure Element 到 OLED 的 SPI；用存在 flash 0x4D00 的 a–z 字形樣板比對畫面上的字母；湊出助記詞存在 0x7000，再經 4G 送出。\n・外洩的是螢幕上顯示的明文，不是破解出來的密鑰。\n・轉場：下一段我只復刻這條鏈的第一棒。（2 分）\n【名詞】\n・字形樣板（glyph template）：存在植入 flash 的 a–z 點陣字形，用來比對畫面上的字母。\n【提問】\n・Q3 為什麼不直接攻擊 Secure Element？\n　因為沒必要——螢幕是明文、顯示線可及，旁聽顯示線比破解安全晶片容易得多。",
+"二、復刻\n【講法】\n・轉場：我用一片 Feather RP2040 復刻其中最要害的那一段。",
+"我復刻什麼、刻意不做什麼\n【講法】\n・這張是倫理骨架，要講慢。\n・研究者的植入：主動植入在裝置內、4G 外洩助記詞、鎖定錢包備份。\n・我的第二螢幕：被動高阻抗、只讀；不接 MISO、不接 +5V；主動回寫的路線我在 2026-11-02 決定移除，不實作。\n・目的只有一個：證明我懂這條攻擊線，但不做出一個真的武器。（2.5 分）\n【名詞】\n・高阻抗：探針腳設成輸入、幾乎不吃電流，所以搭在匯流排上不會改變原本的訊號。\n・MISO：SPI 從周邊回傳主控的資料線；第二螢幕不接它，因為只需要旁聽主控送往螢幕的資料。\n【提問】\n・Q4 你的探針會不會其實也動到了裝置？\n　不會。四線高阻抗、GPIO 全程輸入、硬體鎖成永不驅動；唯一共用電源線是 GND，不接 +5V、不接 MISO。",
+"四條線，被動搭上一支 Nano X\n【講法】\n・一拍一張：左邊是 Nano X 主板的測試點，我手寫標了 CS、CLK、D1、GND，+5V 和 ON 不接；右邊是四條線接到 Feather RP2040。\n・明講：示範裝置是我自己的 Nano X；repo 文件把目標通稱「點陣顯示評估板」，因為這手法適用任何「控制器→OLED 明文 SPI」。\n・資料路徑：四線 → RP2040 的 PIO 擷取 → USB → 主機鏡像。GPIO 全程輸入，硬體鎖成永不驅動。\n・安全護欄：先讓 RP2040 用 USB 通電再搭線。（2 分）\n【名詞】\n・PIO：RP2040 的可程式化 I/O 狀態機，能不佔 CPU 精準取樣匯流排。\n・DMA：直接記憶體存取，不經 CPU 把資料搬進緩衝。\n【提問】\n・Q4 你的探針會不會其實也動到了裝置？\n　不會。四線高阻抗、GPIO 全程輸入、硬體鎖成永不驅動；唯一共用電源線是 GND，不接 +5V、不接 MISO。",
+"真板證據：它真的讀得到\n【講法】\n・靜態畫面時每秒 0 個時脈邊緣——匯流排閒置，代表控制器只在畫面變動時才寫入。\n・切畫面時一次約 8312 個邊緣，差不多就是一張 128×64 全畫面（8192 bit）。\n・擷取 12,480 B，重建出肉眼可讀的字形。\n・誠實補一句：CLK 1.8V 是電表讀值，不等於確認了訊號振幅。（2 分）\n【名詞】\n・write-on-change：只有畫面變動時匯流排才有流量，靜態時閒置。\n【提問】\n・Q4 你的探針會不會其實也動到了裝置？\n　不會。四線高阻抗、GPIO 全程輸入、硬體鎖成永不驅動；唯一共用電源線是 GND，不接 +5V、不接 MISO。",
+"第二螢幕\n【講法】\n・影片一進頁就循環播放：上面是終端裡的 ASCII 鏡像，下面是 Nano X 本機。\n・在裝置上切畫面，終端裡的鏡像同步跟著變。\n・要現場示範就切到終端跑 live_mirror.py；裝置睡著或接觸不良就回到這段錄影，再不行就重播擷取檔。（2.5 分）\n【名詞】\n・第二螢幕：把裝置螢幕的內容即時鏡像到另一個畫面（本案是終端機 ASCII）的被動工具，即 jz 版的成果。\n・framebuffer：一整張畫面的像素記憶體；主機端把匯流排位元組重建成 128×64 的 framebuffer 再畫出來。",
+"三、無碼與 AI 協作\n【講法】\n・轉場：這是今天的重心——Joe 手工做的部分，我用 AI 換掉了哪些。",
+"置換對照：Joe 手工 → jz 用 AI\n【講法】\n・一按一列。\n・協定分析：Joe 用 Logic Pro 8 抓波形手工判讀；我讓 AI 從擷取流推回 SSD1306 命令表，再用真機八頁序列核對。\n・解碼器：Joe 的解碼在植入韌體裡，用字形樣板比對；我的版本由 AI 起草主機端重建，我肉眼對照實體螢幕。\n・編碼器：植入是擷取、存 flash、4G 外送；我的是 PIO 加 DMA 加 USB 串流，只讀不外洩；我用 loopback 驗證，並在真板上抓出 bit-slip。\n・接線：Joe 是顯微焊上植入板；AI 幫我避開 Feather 絲印和 GPIO 編號不一致的坑，我用電表復驗。\n・收束：每一列最右欄「真板驗收」都還是我做的。接下來三張逐一展開。（3 分）\n【名詞】\n・協定分析：從抓到的匯流排資料推回「哪些位元組是命令、哪些是像素」的規則。\n【提問】\n・Q5 「AI 起草」具體是哪些、你實際做了什麼？\n　協定分析、解碼器、編碼器韌體由 AI 起草，接線由 AI 導引；每一項的真板驗收與設限是我做的。",
+"① 協定分析（S1）\n【講法】\n・左邊是 Joe 盯著 Logic Pro 8 的波形手工判讀。\n・右邊三拍：AI 起草命令表（D5、81、A6、C0、A0 加 B0 到 B7 頁命令）；我用真機八頁序列核對重建規則；我設限——控制器型號沒確認就標明，認不出的位元組保留下來，不臆測。\n・一句話：AI 給假設，真板給證據。（2 分）\n【名詞】\n・SSD1306：常見的點陣 OLED 控制器；本案用其相容命令表解碼匯流排。\n【提問】\n・Q5 「AI 起草」具體是哪些、你實際做了什麼？\n　協定分析、解碼器、編碼器韌體由 AI 起草，接線由 AI 導引；每一項的真板驗收與設限是我做的。",
+"② 編碼器（S3）：bit-slip\n【講法】\n・本場最重要的一張。\n・AI 初版的 PIO 看起來對，loopback 自測也過。\n・但真板上第 15 包起全部右移 1 bit，畫面停住：舊 PIO 碰不到 CS 拉高，多一個 bit 就一直錯位到重新上電。\n・改成每個 CS 脈衝只取 8 bit 並清掉殘留後，注入測試 193/193 包對齊，不注入跑 60 秒 578/578 包對齊。\n・重點：這個 bug 是量測抓出來的，不是生成出來的。（2.5 分）\n【名詞】\n・bit-slip：取樣多算或少算一個 bit，之後整串位元組全部錯位。\n・PIO：RP2040 的可程式化 I/O 狀態機，能不佔 CPU 精準取樣匯流排。\n【提問】\n・Q6 bit-slip 是什麼、怎麼抓到的？\n　取樣多算一個 bit 導致之後整串錯位。靠真板擷取檔比對（第 15 包起整體右移 1 bit）加注入測試抓到並修正。",
+"③ 解碼器（S2）：同一手法，相反用途\n【講法】\n・一拍一張：左邊是 Grand 投影片 p.71，植入韌體把字形比對成助記詞；右邊是我的第二螢幕，主機端把位元組重建成整張畫面。\n・同一個手法：攻擊者用它在裝置內竊取，我用它在主機端重建。\n・驗收的限制要講：128×64 點數少，我是肉眼對照，沒做像素級比對。（1.5 分）\n【名詞】\n・decoder：解碼器，把原始位元組還原成有意義的內容；攻擊者還原成助記詞，jz 版還原成整張畫面。\n・framebuffer：一整張畫面的像素記憶體；主機端把匯流排位元組重建成 128×64 的 framebuffer 再畫出來。\n【提問】\n・Q5 「AI 起草」具體是哪些、你實際做了什麼？\n　協定分析、解碼器、編碼器韌體由 AI 起草，接線由 AI 導引；每一項的真板驗收與設限是我做的。",
+"四、結論\n【講法】\n・轉場：這些對攻擊者、研究者和我們代表什麼。",
+"復刻成本，對稱地崩塌了\n【講法】\n・世界級專家幾週的逆向，核心手法一個人用 AI 幾天就能復刻——這個專案就是例子。\n・這股力量是對稱的：攻擊者造植入變便宜，防禦者做驗證也變便宜。\n・仍然稀缺的兩件事：物理可及（AI 不會幫攻擊者拿到你手上的裝置），以及可驗證性（AI 也不會自動證明你這支沒被動過）。\n・不對稱移到了供應鏈完整性與可驗證性。（2 分）",
+"CoolWallet 該先守哪一層\n【講法】\n・由上往下三層：顯示鏈加密或 MAC，讓被動擷取只拿到密文，直接擋住這類攻擊；關鍵走線納入安全邊界，控制器直驅、不可及、沒有測試點；物理防護加開殼偵測，灌膠、防拆網、外殼與主板配對。\n・這三層的檢查都能從人工變成 AI 可規模化的驗證，這正是我們導入 AI 賦能防禦的著力點。（2.5 分）\n【名詞】\n・MAC：訊息鑑別碼；給顯示鏈的資料加上它，被竄改或偽造的資料就能被發現。\n・開殼偵測：外殼被打開或走線被碰觸時留下痕跡或觸發警示的物理防護。\n【提問】\n・Q7 CoolWallet 應該先投資哪一層防線？\n　先把「顯示鏈加密/MAC」放前面——它直接讓被動擷取只拿到密文，擋住這整類攻擊；再疊物理防拆與供應鏈驗證。",
+"結語\n【講法】\n・一句話：AI 時代仍然可信的，不是「AI 做的所以對」，而是事實分級、真板驗收、保留不臆測的紀律。\n・拋討論題：CoolWallet 要先投資哪一層？加密顯示鏈、物理防拆、還是供應鏈驗證？（1.5 分＋問答）\n【提問】\n・Q7 CoolWallet 應該先投資哪一層防線？\n　先把「顯示鏈加密/MAC」放前面——它直接讓被動擷取只拿到密文，擋住這整類攻擊；再疊物理防拆與供應鏈驗證。"
+]
+</script>
+
+<!-- deck-check.js 與配色三檔要在 deck-stage.js 之前：deck-stage 一啟動就把網址的 #debug、#theme= 改成頁碼 -->
+<script src="asset/deck-check.js"></script>
+<script src="asset/deck-theme-rules.js"></script>
+<script src="asset/deck-palette.js"></script>
+<script src="asset/deck-theme-controls.js"></script>
+<script src="asset/gsap.min.js"></script>
+<script src="asset/deck-motion.js"></script>
+<script src="asset/katex/katex.min.js"></script>
+<script src="asset/katex/auto-render.min.js"></script>
+<script src="asset/deck-math.js"></script>
+<script src="asset/deck-stage.js"></script>
+<script src="asset/presenter-stage.js"></script>
+<script src="asset/deck-font-controls.js"></script>
+<script>
+  /* 數字滾動：.stat .n 標上 data-to="47.2" 即在該頁出現時動畫到目標值。
+     遵守 prefers-reduced-motion。沒有 data-to 元素時此段不做任何事。 */
+  (function () {
+    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var deck = document.querySelector('deck-stage');
+    if (!deck) return;
+    deck.addEventListener('slidechange', function (e) {
+      var slide = e.detail && e.detail.slide;
+      if (!slide || !slide.querySelectorAll) return;
+      slide.querySelectorAll('[data-to]').forEach(function (el) {
+        if (el.dataset.counted) return; el.dataset.counted = '1';
+        var to = parseFloat(el.dataset.to), dec = (el.dataset.to.split('.')[1] || '').length;
+        if (reduce) { el.textContent = to.toFixed(dec); return; }
+        var s = null, dur = 1200;
+        (function step(t) {
+          if (s === null) s = t;
+          var p = Math.min((t - s) / dur, 1);
+          el.textContent = (to * (0.5 - Math.cos(Math.PI * p) / 2)).toFixed(dec);
+          if (p < 1) requestAnimationFrame(step);
+        })(performance.now());
+      });
+    });
+  })();
+</script>
+</body>
+</html>
