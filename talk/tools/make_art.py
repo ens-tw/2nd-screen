@@ -65,7 +65,7 @@ for i, (f, place, model) in enumerate(tiles):
     x = round(i * (tw + gap))
     g = photo(x, 0, tw, th, f"media/{f}") + text(x + tw / 2, th + 52, place, 42, "--chapter", 700, "middle") \
         + text(x + tw / 2, th + 102, model, 40, "--text", 400, "middle")
-    body += beat(1, g, "pop", i * 0.12)
+    body += beat(1, g, "pop", i * 0.3)
 write("news-collage.svg", svg(480, body, "2026 年 10 月各國通路回報的植入裝置照片"))
 
 # 2. SP1/SP2/SP3 triptych, one press each.

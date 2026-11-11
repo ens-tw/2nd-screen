@@ -1,7 +1,10 @@
 /* deck-motion.js — deck-svg 的活潑模式（選用的漸進增強），GSAP 3.15 版；要先載 asset/gsap.min.js。
    沒有這支腳本、沒載 gsap.min.js、或在簡報裡按 M 關掉，deck 就是原本的靜態簡報；它只讀投影片上的幾個 data- 屬性：
 
-   data-beat="n"          第 n 拍出現（0 = 進頁時）。→ 先播拍，拍播完才換頁；← 退一拍（瞬間），退到底才回上一頁（全展開）。
+   data-beat="n"          第 n 拍出現（0 = 進頁時）。預設自動逐拍：進頁（轉場結束）後每 0.3 秒自己播下一拍，講者不必按鍵就看到整頁依序出現；
+                          A 切換自動／逐按（記在 localStorage），簡報控制台的 A 也會轉送過來。逐按時 → 先播拍、拍播完才換頁。
+                          自動時按 → 提早播下一拍並從那一拍重新計時，拍播完再按才換頁；← 退一拍（瞬間）並停掉這頁的自動，退到底才回上一頁（全展開）。
+                          <html data-deck-auto="0.5"> 改這份簡報的間隔秒數，data-deck-auto="off" 讓它預設逐按（A 仍可打開）。
                           Shift+← 動畫式倒退一拍、Shift+→ 重播這拍、[ ] 全域變速、D 把這拍拉成可拖的時間軸（GSDevTools，排拍時看節奏用）。
    data-fx                fadeup（預設）｜pop｜draw（SVG 線條畫出）｜type（逐字打出，純文字元素）｜count（數字遞增，從元素文字抓數字）｜hold（瞬間）
                           ｜chars（逐字彈入）｜lines（整行從遮罩下升起）｜scramble（亂碼解出：data-chars 指定亂碼字元，預設有數字就用 0-9、否則用自己的字）
@@ -95,10 +98,28 @@
 
   // ---- 狀態 ----
   let on = false, trans = null, stageEl = null, toastEl = null, toastTimer = 0, speed = 1, devOn = false, dev = null;
+  // 自動逐拍：預設開、每 0.3 秒一拍，因為講者常要邊講邊看台下，一拍一按會讓手綁在鍵盤上；要配合口白逐按時按 A。
+  const AUTO_ATTR = (document.documentElement.dataset.deckAuto || '').trim();
+  const AUTO_STEP = parseFloat(AUTO_ATTR) > 0 ? parseFloat(AUTO_ATTR) : .3;
+  const AUTO_KEY = 'deck-motion.auto.' + location.pathname;
+  let auto = AUTO_ATTR !== 'off', autoTimer = 0;
   let S = { slide: null, P: null, beat: 0, late: [], tls: new Map(), alongs: [] };
   const sections = () => (stageEl ? Array.from(stageEl.children).filter((c) => c.tagName === 'SECTION') : []);
   const index = () => sections().indexOf(S.slide);
-  const announce = () => document.dispatchEvent(new CustomEvent('deckbeat', { detail: { beat: S.beat, beats: on && !REVEAL && S.P ? S.P.beats : 0, index: index() } }));
+  const announce = () => document.dispatchEvent(new CustomEvent('deckbeat', { detail: { beat: S.beat, beats: on && !REVEAL && S.P ? S.P.beats : 0, index: index(), auto: on && auto } }));
+
+  // ---- 自動逐拍：一次只排一個計時器，每播一拍再排下一個，所以手動按 → 之後是從那一拍重新算 0.3 秒 ----
+  function autoStop() { clearTimeout(autoTimer); autoTimer = 0; }
+  function autoQueue() {
+    autoStop();
+    if (!on || !auto || REVEAL || !S.slide || trans || S.beat >= S.P.beats) return;
+    autoTimer = setTimeout(autoTick, AUTO_STEP / speed * 1000);   // [ ] 變速時間隔跟著縮放
+  }
+  function autoTick() {
+    autoTimer = 0;
+    if (!on || !auto || REVEAL || !S.slide || trans || S.beat >= S.P.beats) return;
+    S.beat++; playBeat(S.beat); camera(false); announce(); autoQueue();
+  }
 
   // 這一拍的 timeline：現做（Flip 要在換版面的當下量）；instant ＝ 直接定到終態
   function build(b, instant) {
@@ -163,7 +184,7 @@
   }
   function leave() {
     if (!S.slide) return;
-    killDev(); S.alongs.forEach((t) => t.kill()); S.tls.forEach((tl) => tl.kill());
+    autoStop(); killDev(); S.alongs.forEach((t) => t.kill()); S.tls.forEach((tl) => tl.kill());
     gsap.killTweensOf(S.slide); gsap.set(S.slide, { clearProps: 'transform,transformOrigin' });
   }
   // mode：play ＝ 前面的拍瞬間定好、這一拍播；instant ＝ 到這一拍為止全部瞬間；transition ＝ 什麼都先不定，第 0 拍由轉場在中途播
@@ -177,6 +198,7 @@
     for (let b = 0; b <= upto; b++) instantBeat(b);
     if (mode === 'play') playBeat(S.beat);
     startAlong(); camera(mode !== 'play'); announce();
+    if (mode !== 'transition') autoQueue();
   }
 
   // ---- 跨頁延續的來源：前一頁，找不到就往更早的頁找（非當前頁只是 visibility:hidden，量得到） ----
@@ -224,6 +246,7 @@
     gsap.set(T.prev, { clearProps: 'visibility,opacity,zIndex,pointerEvents,transform,transformOrigin,x,scale' });
     gsap.set(T.slide, { clearProps: 'zIndex,opacity,x,scale' });
     camera(false);
+    autoQueue();
   }
 
   // ---- GSDevTools（D）：把目前這拍的 timeline 拉成可拖的時間軸，排拍時看節奏用 ----
@@ -235,8 +258,8 @@
     if (!on || REVEAL || !S.slide) return;
     if (trans) { finishTransition(); e.preventDefault(); return; }
     const d = e.detail && e.detail.direction;
-    if (d > 0 && S.beat < S.P.beats) { S.beat++; playBeat(S.beat); camera(false); announce(); e.preventDefault(); }
-    else if (d < 0 && S.beat > 0) { undoBeat(S.beat); S.beat--; killDev(); attachDev(); camera(false); announce(); e.preventDefault(); }
+    if (d > 0 && S.beat < S.P.beats) { S.beat++; playBeat(S.beat); camera(false); announce(); autoQueue(); e.preventDefault(); }
+    else if (d < 0 && S.beat > 0) { autoStop(); undoBeat(S.beat); S.beat--; killDev(); attachDev(); camera(false); announce(); e.preventDefault(); }
   });
   document.addEventListener('slidechange', (e) => {
     const d = e.detail || {}; if (!d.slide) return;
@@ -255,29 +278,38 @@
   function setOn(v) {
     on = v; try { localStorage.setItem(KEY, v ? '1' : '0'); } catch (e) {}
     document.documentElement.toggleAttribute('data-deck-motion', v);
-    if (!v) { finishTransition(); killDev(); if (S.slide) { const keep = S.beat; leave(); S.alongs = []; revealAll(); S.beat = keep; } }
+    if (!v) { autoStop(); finishTransition(); killDev(); if (S.slide) { const keep = S.beat; leave(); S.alongs = []; revealAll(); S.beat = keep; } }
     else if (S.slide) setSlide(S.slide, S.beat, 'instant');
     announce();
-    toast(on ? '活潑模式：開（→ 逐拍）' : '活潑模式：關');
+    toast(on ? (auto ? `活潑模式：開（自動，每 ${AUTO_STEP} 秒一拍）` : '活潑模式：開（→ 逐拍）') : '活潑模式：關');
   }
   window.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target; if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
     if (e.key === 'm' || e.key === 'M') { setOn(!on); e.preventDefault(); return; }
+    if (e.key === 'a' || e.key === 'A') { setAuto(!auto); e.preventDefault(); return; }
     if (!on || REVEAL || !S.slide) return;
-    if (e.shiftKey && e.key === 'ArrowLeft') { if (trans) finishTransition(); else if (S.beat > 0) { reverseBeat(S.beat); S.beat--; killDev(); camera(false); announce(); } else return; }   // 退到底交給 runtime 回上一頁
+    if (e.shiftKey && e.key === 'ArrowLeft') { if (trans) finishTransition(); else if (S.beat > 0) { autoStop(); reverseBeat(S.beat); S.beat--; killDev(); camera(false); announce(); } else return; }   // 退到底交給 runtime 回上一頁
     else if (e.shiftKey && e.key === 'ArrowRight') { if (trans) finishTransition(); else { undoBeat(S.beat); playBeat(S.beat); } }
     else if (e.key === '[' || e.key === ']') { speed = e.key === '[' ? Math.max(.25, speed / 2) : Math.min(4, speed * 2); if (!RM) gsap.globalTimeline.timeScale(speed); toast(`速度 ×${speed}`); }
     else if ((e.key === 'd' || e.key === 'D') && HAS('GSDevTools')) { devOn = !devOn; attachDev(); toast(devOn ? '時間軸工具：開（拖著看這一拍）' : '時間軸工具：關'); }
     else return;
     e.preventDefault(); e.stopImmediatePropagation();
   }, true);   // capture：要搶在 deck-stage 的 ←／→ 之前
-  window.addEventListener('message', (e) => { if (e.data && e.data.deckMotionKey) setOn(!on); });
+  function setAuto(v) {
+    auto = v; try { localStorage.setItem(AUTO_KEY, v ? '1' : '0'); } catch (e) {}
+    if (v) autoQueue(); else autoStop();
+    announce();
+    toast(v ? `自動逐拍：開（每 ${AUTO_STEP} 秒）` : '自動逐拍：關（→ 逐拍）');
+  }
+  window.addEventListener('message', (e) => { if (e.data && e.data.deckMotionKey) setOn(!on); if (e.data && e.data.deckAutoKey) setAuto(!auto); });
 
   function init() {
     stageEl = document.querySelector('deck-stage');
     document.querySelectorAll('deck-stage [data-id]').forEach((e) => { e.dataset.flipId = e.dataset.id; });   // Flip 用 data-flip-id 配對
     let stored = null; try { stored = localStorage.getItem(KEY); } catch (e) {}
+    let storedAuto = null; try { storedAuto = localStorage.getItem(AUTO_KEY); } catch (e) {}
+    if (storedAuto != null) auto = storedAuto === '1';
     const authored = document.documentElement.hasAttribute('data-deck-motion') || !!document.querySelector('deck-stage [data-beat]');
     on = !REVEAL && (stored == null ? authored : stored === '1');
     document.documentElement.toggleAttribute('data-deck-motion', on);

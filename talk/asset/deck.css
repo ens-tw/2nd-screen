@@ -243,6 +243,9 @@
     background: linear-gradient(180deg, var(--title-from, #fff) 0%, var(--title-to, #cdd4e4) 62%, var(--accent) 125%);
     -webkit-background-clip: text; background-clip: text; color: transparent;
   }
+  /* SplitText（M-CHARS／M-LINES）把標題拆成子 div 後，父層的 background-clip:text 不再畫到子層的字，
+     整個標題在 Chrome 變透明：子層各自接同一個漸層再裁一次。 */
+  .hero h1 > div { background: inherit; -webkit-background-clip: text; background-clip: text; }
   .hero__sub { font-size: calc(48px * var(--deck-font-scale, 1)); color: var(--body); margin: 36px auto 0; max-width: 1500px; line-height:1.45; }
   /* Balance centred headline lines so a wrap never strands one or two
      characters on a line of their own. */
@@ -309,6 +312,9 @@
     [data-beat] { opacity:1 !important; transform:none !important; }   /* 活潑模式：每頁全展開 */
     [data-beat][data-fx="draw"] { stroke-dasharray:none !important; stroke-dashoffset:0 !important; }   /* 畫到一半的線也畫滿 */
     deck-stage > section { transform:none !important; }                 /* 拿掉鏡頭緩推 */
+    /* 封面標題的漸層字（background-clip:text）在 Chrome 存成 PDF 時裁切會失效，
+       整塊漸層印成方框（淺色主題是黑框）：列印改用實色字。 */
+    .hero h1, .hero h1 > div { background:none !important; -webkit-background-clip:border-box !important; background-clip:border-box !important; color:var(--title-from, var(--text)) !important; }
   }
 
   /* ---------- two-column text block (.colblock) — used by reading-guide ---------- */
@@ -342,7 +348,7 @@
   /* ---------- formula line (storyboard 公式 column → p.fx, typeset by asset/katex) ----------
      One line under the slide body, at body size, for an audience that reads the formula
      faster than the prose; .sep separates several formulas, small is a gloss. */
-  p.fx { margin: 28px 0 0; padding-top: 18px; border-top: 1px solid var(--hair);
+  p.fx { margin: 20px 0 0; padding-top: 14px; border-top: 1px solid var(--hair);
     font-size: calc(40px * var(--deck-font-scale, 1)); line-height: 1.6; color: var(--body); }
   p.fx .katex { font-size: 1em; color: var(--text); }
   p.fx .sep { margin: 0 .6em; color: var(--body); }
